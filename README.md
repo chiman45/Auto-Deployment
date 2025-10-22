@@ -1,95 +1,114 @@
-# Custom-CICD YAML Auto-Fixer
+Custom-CICD YAML Auto-Fixer
 
-A Python-based agent that automatically detects errors in YAML files within a GitHub repository, fixes them using Google Gemini API, and logs all actions. 
-Designed for CI/CD pipelines and project repositories to maintain valid YAML configurations.
+A Python + Docker–based AI agent that automatically detects and fixes YAML file errors in a GitHub repository using Google Gemini.
+It creates a new branch, commits the fixes, and opens a Pull Request — fully automated ✨
 
-# Features
+🚀 Features
 
-Clones a GitHub repository locally.
+✅ Clones a GitHub repository securely using a personal access token (PAT) from your .env.
+✅ Recursively scans all .yaml and .yml files.
+✅ Detects and logs YAML syntax or formatting errors.
+✅ Uses Gemini 2.5 Flash API to:
 
-Recursively scans all YAML files (*.yaml / *.yml).
+Automatically repair invalid YAML.
 
-Detects syntax or formatting errors in YAML files.
+Explain the root cause and applied fix.
+✅ Commits and pushes all corrections to a new branch.
+✅ Automatically creates a Pull Request (PR) for review and merge.
+✅ Logs all actions in agent_log.txt.
 
-Uses Gemini API to:
-
-Automatically fix broken YAML.
-
-Explain the errors and how they were fixed.
-
-Logs errors, fixes, and explanations in agent_log.txt.
-
-Commits and pushes fixes to GitHub (current branch or a new branch).
-
-# Requirements
+⚙️ Requirements
 
 Python 3.10+
 
-Packages:
-```bash
-pip install gitpython ruamel.yaml google-generativeai python-dotenv
-```
+Docker (recommended)
 
-Gemini API key from Google Cloud.
+Google Gemini API Key
 
-Create a .env file in the project root:
-```bash
-GEMINI_API_KEY=YOUR_GEMINI_API_KEY
-```
+GitHub Personal Access Token (PAT) with:
 
-Add .env to .gitignore (already included).
+repo (for private repos)
 
-Install dependencies:
-```bash
+public_repo (for public repos)
+
+📦 Dependencies
+
+If running locally (without Docker):
+
+pip install gitpython ruamel.yaml google-generativeai python-dotenv requests
+
+
+Or, if you’re using Docker:
+
+docker build -t myagent:latest .
+
+🔐 Environment Variables
+
+Create a .env file in your project root:
+
+GEMINI_API_KEY=your_gemini_api_key
+GITHUB_USERNAME=your_github_username
+GITHUB_TOKEN=your_github_pat
+
+
+✅ Keep .env in your .gitignore — it contains sensitive info.
+
+🐳 Run via Docker
+docker run -it --env-file .env --name agent_container myagent:latest
+
+
+The container will prompt you for:
+
+GitHub repository URL
+
+Local directory name
+
+Commit message
+
+Then it will:
+
+Clone your repo
+
+Fix YAML errors
+
+Push fixes on a new branch
+
+Open a pull request automatically
+
+🧩 Example Workflow
+Enter the GitHub repository URL: https://github.com/username/project
+Enter the local directory name: repo-local
+Enter the commit message: fix yaml configs
+
+→ Cloning repository...
+→ Found and fixed 3 YAML errors.
+→ Committed and pushed branch yaml-fix-20251022.
+→ Pull Request created: https://github.com/username/project/pull/12
+
+🧾 Logging
+
+All operations are recorded in agent_log.txt:
+
+File names with detected errors
+
+Gemini’s explanations of fixes
+
+Corrected YAML content
+
+Branch name, commit details, and PR link
+
+🧰 Development Notes
+
+Uses gemini-2.5-flash-001 model (automatically fallback to Pro if unavailable).
+
+Automatically creates unique branch names (e.g. yaml-fix-20251022152206).
+
+Safe to run multiple times — each execution generates a new branch and PR.
+
+🧑‍💻 Local Development Mode
+
+For live-coding (no rebuild needed after edits):
+
+docker run -it --rm --env-file .env -v .:/app --name agent_dev python:3.10-slim bash
 pip install -r requirements.txt
-```
-
-
-Usage
-
-Configure the target repo in main.py:
-
-repo_url = "https://github.com/<username>/<repo>.git"
-
-
-Run the agent:
-```bash
 python main.py
-```
-
-# The script will:
-
-Clone the repo if not already cloned.
-
-Scan for YAML errors.
-
-Fix broken YAML using Gemini API.
-
-Log actions in agent_log.txt.
-
-Commit and push fixes to GitHub.
-
-
-# Notes
-
-By default, the script works on the current branch.
-
-For safety, it is recommended to create a new branch for automatic fixes.
-
-Avoid committing your .env file; it contains sensitive API keys.
-
-# Logging
-
-All actions are logged in agent_log.txt:
-
-File errors detected.
-
-Gemini’s explanation of the issue.
-
-Fixed YAML content.
-
-Commit and branch information.
-
-# License
-
-MIT License – feel free to use and modify this project.
