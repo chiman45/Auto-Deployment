@@ -352,6 +352,11 @@ MIT License - feel free to use this in your projects!
 
 ---
 
+## Collaborator and Special Thanks 
+Tejasvi Sinha
+Shreya Kumari
+
+
 ## 🙏 Credits
 
 Built with ❤️ using:
@@ -365,11 +370,7 @@ Built with ❤️ using:
 
 ## 💬 Contact & Support
 
-- 📧 Email: your.email@example.com
-- 🐦 Twitter: [@yourhandle](https://twitter.com/yourhandle)
-- 💼 LinkedIn: [Your Name](https://linkedin.com/in/yourprofile)
-- 🌐 Website: [yourwebsite.com](https://yourwebsite.com)
-
+- 📧 Email: chimanesda@gmail.com
 ---
 
 <div align="center">
