@@ -29,7 +29,9 @@ class GitHubRepoAnalyzer:
     def __init__(self):
         self.repo_url = None
         self.github_token = None
-        self.ollama_model = "llama3"  # Default Ollama model
+        self.code_model = "codellama"  # For Dockerfiles and code
+        self.config_model = "llama3"    # For YAML/K8s configs
+        self.fix_model = "codellama"    # For generating fixes
         self.local_repo_path = "./temp_repo"
         self.repo = None
         self.vectorstore = None
@@ -52,22 +54,45 @@ class GitHubRepoAnalyzer:
             if ollama_check.status_code == 200:
                 models = ollama_check.json().get('models', [])
                 if models:
-                    print(f"✅ Ollama is running with {len(models)} models")
-                    # Use first available model or llama3
                     available_models = [m['name'] for m in models]
-                    if 'llama3:latest' in available_models:
-                        self.ollama_model = 'llama3'
-                    elif 'codellama:latest' in available_models:
-                        self.ollama_model = 'codellama'
-                    elif 'mistral:latest' in available_models:
-                        self.ollama_model = 'mistral'
+                    print(f"✅ Ollama is running with {len(models)} models")
+                    
+                    # Check for specialized models
+                    has_codellama = any('codellama' in m for m in available_models)
+                    has_llama3 = any('llama3' in m for m in available_models)
+                    has_mistral = any('mistral' in m for m in available_models)
+                    
+                    # Set code model (prefer codellama for code analysis)
+                    if has_codellama:
+                        self.code_model = 'codellama'
+                        self.fix_model = 'codellama'
+                        print("📦 Code analysis: codellama")
+                    elif has_llama3:
+                        self.code_model = 'llama3'
+                        self.fix_model = 'llama3'
+                        print("📦 Code analysis: llama3")
                     else:
-                        self.ollama_model = available_models[0].split(':')[0]
-                    print(f"📦 Using model: {self.ollama_model}")
+                        self.code_model = available_models[0].split(':')[0]
+                        self.fix_model = available_models[0].split(':')[0]
+                    
+                    # Set config model (prefer llama3 for YAML/K8s)
+                    if has_llama3:
+                        self.config_model = 'llama3'
+                        print("📦 Config analysis: llama3")
+                    elif has_codellama:
+                        self.config_model = 'codellama'
+                        print("📦 Config analysis: codellama")
+                    else:
+                        self.config_model = available_models[0].split(':')[0]
+                    
+                    print("💡 Tip: Install both 'codellama' and 'llama3' for best results")
                 else:
-                    print("⚠️  No models found. Installing llama3...")
+                    print("⚠️  No models found. Installing recommended models...")
                     subprocess.run(['ollama', 'pull', 'llama3'], check=True)
-                    self.ollama_model = 'llama3'
+                    subprocess.run(['ollama', 'pull', 'codellama'], check=True)
+                    self.code_model = 'codellama'
+                    self.config_model = 'llama3'
+                    self.fix_model = 'codellama'
             else:
                 raise Exception("Ollama not responding")
         except Exception as e:
@@ -75,7 +100,7 @@ class GitHubRepoAnalyzer:
             print("\n💡 Install Ollama to use local models (no rate limits!):")
             print("   1. Download from: https://ollama.ai")
             print("   2. Install and run: ollama serve")
-            print("   3. Pull a model: ollama pull llama3")
+            print("   3. Pull models: ollama pull llama3 && ollama pull codellama")
             sys.exit(1)
         
         # Get GitHub token from user
@@ -272,12 +297,22 @@ Check for: apiVersion, resource specs, missing colons, port numbers. Return ONLY
         }
         
         try:
+            # Select appropriate model based on file type
+            if file_type == 'docker':
+                selected_model = self.code_model  # codellama for Dockerfiles
+                print(f"  🤖 Using {selected_model} for Dockerfile analysis")
+            elif file_type in ['yaml', 'k8s']:
+                selected_model = self.config_model  # llama3 for configs
+                print(f"  🤖 Using {selected_model} for config analysis")
+            else:
+                selected_model = self.config_model
+            
             # Use local Ollama model (no rate limits!)
             prompt = prompts.get(file_type, prompts['yaml'])
             
             ollama_url = "http://localhost:11434/api/generate"
             payload = {
-                "model": self.ollama_model,
+                "model": selected_model,
                 "prompt": prompt,
                 "stream": False,
                 "format": "json"
@@ -534,10 +569,11 @@ CRITICAL:
 3. Do NOT wrap in code blocks or backticks
 4. Preserve the original structure as much as possible"""
             
-            # Use local Ollama model (no rate limits!)
+            # Use local Ollama model - codellama for fixes (best at generating code)
+            print(f"      🤖 Using {self.fix_model} for code generation")
             ollama_url = "http://localhost:11434/api/generate"
             payload = {
-                "model": self.ollama_model,
+                "model": self.fix_model,  # codellama for fixing
                 "prompt": prompt,
                 "stream": False
             }
