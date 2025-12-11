@@ -288,11 +288,155 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
         """Check YAML syntax"""
         errors = []
         try:
-            with open(file_path, 'r') as f:
+            with open(file_path, 'r', encoding='utf-8') as f:
                 yaml.safe_load_all(f)
         except yaml.YAMLError as e:
             errors.append(f"YAML syntax error in {file_path}: {str(e)}")
         return errors
+    
+    def check_dockerfile_syntax(self, file_path: str) -> List[str]:
+        """Check Dockerfile for common syntax errors"""
+        errors = []
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                for i, line in enumerate(lines, 1):
+                    # Check for FROM statement issues
+                    if line.strip().startswith('FROM') and not line.strip().endswith('\\'):
+                        # Check if FROM statement is incomplete
+                        if line.strip() == 'FROM':
+                            errors.append(f"Line {i}: FROM statement is incomplete - missing base image")
+                        # Check if FROM has proper format
+                        parts = line.strip().split()
+                        if len(parts) < 2:
+                            errors.append(f"Line {i}: FROM requires at least one argument (base image)")
+        except Exception as e:
+            errors.append(f"Could not check Dockerfile: {e}")
+        return errors
+    
+    def fix_dockerfile(self, file_path: str) -> bool:
+        """Fix common Dockerfile syntax errors"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            fixed = False
+            new_lines = []
+            i = 0
+            
+            while i < len(lines):
+                line = lines[i]
+                
+                # Fix split FROM statements
+                if line.strip() == 'FROM' and i + 1 < len(lines):
+                    # Check if next non-empty line has the base image
+                    next_line_idx = i + 1
+                    while next_line_idx < len(lines) and not lines[next_line_idx].strip():
+                        next_line_idx += 1
+                    
+                    if next_line_idx < len(lines):
+                        base_image = lines[next_line_idx].strip()
+                        # Combine FROM with base image
+                        new_lines.append(f"FROM {base_image}\n")
+                        fixed = True
+                        print(f"      ✅ Fixed: Combined 'FROM' with '{base_image}'")
+                        # Skip the empty lines and base image line
+                        i = next_line_idx + 1
+                        continue
+                
+                new_lines.append(line)
+                i += 1
+            
+            if fixed:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.writelines(new_lines)
+                return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"      ⚠️  Could not fix Dockerfile: {e}")
+            return False
+    
+    def fix_discovered_issues(self, analysis_results, files_found) -> List[str]:
+        """Fix issues found during analysis"""
+        fixed_files = []
+        
+        print(f"\n{'='*60}")
+        print("FIXING DISCOVERED ISSUES")
+        print(f"{'='*60}")
+        
+        for result in analysis_results:
+            file_path = os.path.join(self.local_repo_path, result['file'])
+            
+            # Fix Dockerfile issues
+            if result['type'] == 'docker':
+                print(f"\n📝 Checking if {result['file']} can be fixed...")
+                
+                # Check for FROM statement errors
+                has_from_error = any('FROM' in str(error) for error in result['analysis']['errors'])
+                
+                if has_from_error:
+                    if self.fix_dockerfile(file_path):
+                        fixed_files.append(result['file'])
+                        print(f"   ✅ Fixed {result['file']}")
+                    else:
+                        print(f"   ⚠️  Could not auto-fix {result['file']}")
+        
+        if fixed_files:
+            print(f"\n✅ Fixed {len(fixed_files)} file(s)")
+        else:
+            print(f"\n⚠️  No files could be auto-fixed")
+        
+        return fixed_files
+    
+    def analyze_yaml_static(self, file_path: str, content: str) -> Dict[str, Any]:
+        """Static YAML analysis without API calls"""
+        errors = []
+        warnings = []
+        suggestions = []
+        
+        try:
+            docs = list(yaml.safe_load_all(content))
+            
+            for doc in docs:
+                if not doc:
+                    continue
+                    
+                # K8s specific checks
+                if 'kind' in doc:
+                    # Check for resource limits
+                    if doc['kind'] == 'Deployment':
+                        if 'spec' in doc and 'template' in doc['spec']:
+                            containers = doc['spec']['template']['spec'].get('containers', [])
+                            for container in containers:
+                                if 'resources' not in container:
+                                    warnings.append(f"Container '{container.get('name', 'unknown')}' missing resource limits")
+                                
+                                # Check for security context
+                                if 'securityContext' not in container:
+                                    suggestions.append(f"Consider adding securityContext for container '{container.get('name', 'unknown')}'")
+                    
+                    # Check for security context at pod level
+                    if doc['kind'] in ['Deployment', 'Pod', 'DaemonSet', 'StatefulSet']:
+                        spec = doc.get('spec', {})
+                        if doc['kind'] == 'Deployment':
+                            spec = doc['spec'].get('template', {}).get('spec', {})
+                        
+                        if 'securityContext' not in spec:
+                            warnings.append("Missing pod-level security context")
+        
+        except Exception as e:
+            errors.append(f"Static analysis error: {str(e)}")
+        
+        severity = "high" if errors else ("medium" if warnings else "low")
+        
+        return {
+            "errors": errors,
+            "warnings": warnings,
+            "suggestions": suggestions,
+            "severity": severity
+        }
     
     def analyze_repository(self):
         """Analyze all YAML, Docker, and K8s files"""
@@ -300,7 +444,9 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
         
         analysis_results = []
         files_found = []
+        files_to_analyze = []
         
+        # First pass: collect all files
         for root, dirs, files in os.walk(self.local_repo_path):
             if '.git' in root:
                 continue
@@ -316,7 +462,7 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
                     files_found.append(('YAML', relative_path))
                     # Check if it's a K8s manifest
                     try:
-                        with open(file_path, 'r') as f:
+                        with open(file_path, 'r', encoding='utf-8') as f:
                             content = f.read()
                             if 'apiVersion:' in content or 'kind:' in content:
                                 file_type = 'k8s'
@@ -327,46 +473,102 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
                     files_found.append(('Dockerfile', relative_path))
                 
                 if file_type:
-                    print(f"  📄 Analyzing: {relative_path}")
+                    files_to_analyze.append((file_path, relative_path, file_type))
+        
+        # Second pass: analyze with delays
+        for i, (file_path, relative_path, file_type) in enumerate(files_to_analyze):
+            print(f"  📄 Analyzing: {relative_path}")
+            
+            # Basic syntax check for YAML
+            if file_type in ['yaml', 'k8s']:
+                syntax_errors = self.check_yaml_syntax(file_path)
+                if syntax_errors:
+                    self.errors_found.extend(syntax_errors)
+                    analysis_results.append({
+                        'file': relative_path,
+                        'type': file_type,
+                        'analysis': {
+                            'errors': syntax_errors,
+                            'warnings': [],
+                            'suggestions': [],
+                            'severity': 'high'
+                        }
+                    })
+            
+            # Syntax check for Dockerfile
+            if file_type == 'docker':
+                dockerfile_errors = self.check_dockerfile_syntax(file_path)
+                if dockerfile_errors:
+                    self.errors_found.extend(dockerfile_errors)
+                    analysis_results.append({
+                        'file': relative_path,
+                        'type': file_type,
+                        'analysis': {
+                            'errors': dockerfile_errors,
+                            'warnings': [],
+                            'suggestions': [],
+                            'severity': 'high'
+                        }
+                    })
+            
+            # Static analysis for K8s files (doesn't use API)
+            if file_type == 'k8s':
+                try:
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
                     
-                    # Basic syntax check for YAML
-                    if file_type in ['yaml', 'k8s']:
-                        syntax_errors = self.check_yaml_syntax(file_path)
-                        if syntax_errors:
-                            self.errors_found.extend(syntax_errors)
-                            analysis_results.append({
-                                'file': relative_path,
-                                'type': file_type,
-                                'analysis': {
-                                    'errors': syntax_errors,
-                                    'warnings': [],
-                                    'suggestions': [],
-                                    'severity': 'high'
-                                }
-                            })
+                    static_analysis = self.analyze_yaml_static(file_path, content)
                     
-                    # Deep analysis with Gemini (with retry logic)
-                    try:
-                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                            content = f.read()
+                    if static_analysis and (static_analysis['errors'] or static_analysis['warnings']):
+                        analysis_results.append({
+                            'file': relative_path,
+                            'type': file_type,
+                            'analysis': static_analysis
+                        })
                         
-                        gemini_analysis = self.analyze_with_gemini(relative_path, content, file_type)
-                        
-                        if gemini_analysis and (gemini_analysis['errors'] or gemini_analysis['warnings']):
-                            analysis_results.append({
-                                'file': relative_path,
-                                'type': file_type,
-                                'analysis': gemini_analysis
-                            })
-                            
-                            # Add to errors list
-                            for error in gemini_analysis['errors']:
-                                self.errors_found.append(f"[{relative_path}] ERROR: {error}")
-                            for warning in gemini_analysis['warnings']:
-                                self.errors_found.append(f"[{relative_path}] WARNING: {warning}")
+                        for error in static_analysis['errors']:
+                            self.errors_found.append(f"[{relative_path}] ERROR: {error}")
+                        for warning in static_analysis['warnings']:
+                            self.errors_found.append(f"[{relative_path}] WARNING: {warning}")
+                
+                except Exception as e:
+                    print(f"  ⚠️  Error in static analysis {relative_path}: {e}")
+            
+            # Add delay before Gemini API call (only for deep analysis)
+            if i > 0 and i < len(files_to_analyze):
+                time.sleep(3)  # 3 second delay between API calls
+            
+            # Deep analysis with Gemini (with retry logic)
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                
+                gemini_analysis = self.analyze_with_gemini(relative_path, content, file_type)
+                
+                if gemini_analysis and (gemini_analysis['errors'] or gemini_analysis['warnings']):
+                    # Check if we already have results for this file
+                    existing = next((r for r in analysis_results if r['file'] == relative_path), None)
                     
-                    except Exception as e:
-                        print(f"  ⚠️  Error analyzing {relative_path}: {e}")
+                    if existing:
+                        # Merge results
+                        existing['analysis']['errors'].extend(gemini_analysis['errors'])
+                        existing['analysis']['warnings'].extend(gemini_analysis['warnings'])
+                        existing['analysis']['suggestions'].extend(gemini_analysis['suggestions'])
+                    else:
+                        analysis_results.append({
+                            'file': relative_path,
+                            'type': file_type,
+                            'analysis': gemini_analysis
+                        })
+                    
+                    # Add to errors list
+                    for error in gemini_analysis['errors']:
+                        self.errors_found.append(f"[{relative_path}] ERROR: {error}")
+                    for warning in gemini_analysis['warnings']:
+                        self.errors_found.append(f"[{relative_path}] WARNING: {warning}")
+            
+            except Exception as e:
+                print(f"  ⚠️  Error analyzing {relative_path}: {e}")
         
         # Print files found summary
         print(f"\n{'='*60}")
@@ -415,7 +617,8 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
         """Create a comprehensive fixes file"""
         fixes_path = os.path.join(self.local_repo_path, "ANALYSIS_REPORT.md")
         
-        with open(fixes_path, 'w') as f:
+        # FIX: Add UTF-8 encoding to handle emoji characters
+        with open(fixes_path, 'w', encoding='utf-8') as f:
             f.write("# Repository Analysis Report\n\n")
             f.write(f"Generated by GitHub Repo Analyzer Agent\n\n")
             
@@ -487,7 +690,7 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
             
             # Read docker-compose.yml to find env_file references
             try:
-                with open(compose_path, 'r') as f:
+                with open(compose_path, 'r', encoding='utf-8') as f:
                     compose_content = f.read()
                     
                 # Check for common .env file locations
@@ -508,7 +711,7 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
                             create_env = input(f"      Create empty .env file? (yes/no): ").strip().lower()
                             if create_env == 'yes':
                                 os.makedirs(os.path.dirname(env_path), exist_ok=True)
-                                with open(env_path, 'w') as env_file:
+                                with open(env_path, 'w', encoding='utf-8') as env_file:
                                     env_file.write("# Environment variables\n")
                                     env_file.write("# Add your configuration here\n")
                                 print(f"      ✅ Created: {os.path.relpath(env_path, self.local_repo_path)}")
@@ -578,7 +781,8 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
                     print("\n💡 Common fixes:")
                     print("   1. Create missing .env files")
                     print("   2. Check docker-compose.yml syntax")
-                    print("   3. Ensure all required environment variables are set")
+                    print("   3. Check Dockerfile syntax (look for split FROM statements)")
+                    print("   4. Ensure all required environment variables are set")
                     
             except FileNotFoundError:
                 print("❌ docker-compose command not found. Please install Docker Compose.")
@@ -587,7 +791,7 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
             
             return
         
-        # Fallback: Search for individual Dockerfiles (don't skip any folders except .git)
+        # Fallback: Search for individual Dockerfiles
         print("\n🔍 No docker-compose.yml found, searching for Dockerfiles...")
         dockerfiles = []
         
@@ -691,7 +895,7 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
             print(f"❌ Docker build/run failed: {e}")
             print(f"\n💡 Check if Dockerfile is valid or if Docker daemon is running")
     
-    def commit_and_push(self, analysis_results, files_found):
+    def commit_and_push(self, analysis_results, files_found, fixed_files):
         """Commit changes and push to new branch"""
         # Always create report even if no issues
         print(f"\n{'='*60}")
@@ -713,7 +917,10 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
         # Ask for commit message
         commit_message = input("Enter commit message: ").strip()
         if not commit_message:
-            commit_message = f"Add analysis report - {len(files_found)} files checked"
+            if fixed_files:
+                commit_message = f"Fix {len(fixed_files)} file(s) and add analysis report"
+            else:
+                commit_message = f"Add analysis report - {len(files_found)} files checked"
         
         try:
             # Create and checkout new branch
@@ -721,8 +928,13 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
             new_branch = self.repo.create_head(branch_name)
             new_branch.checkout()
             
-            # Add the analysis report
-            self.repo.index.add(['ANALYSIS_REPORT.md'])
+            # Add the analysis report and fixed files
+            files_to_add = ['ANALYSIS_REPORT.md']
+            if fixed_files:
+                files_to_add.extend(fixed_files)
+                print(f"📝 Adding fixed files: {', '.join(fixed_files)}")
+            
+            self.repo.index.add(files_to_add)
             
             # Commit
             print(f"💾 Committing changes...")
@@ -785,6 +997,13 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
                     elif file.lower() == 'dockerfile' or file.endswith('.dockerfile'):
                         files_found.append(('Dockerfile', relative_path))
             
+            # Fix discovered issues
+            fixed_files = []
+            if analysis_results:
+                fix_issues = input("\n🔧 Do you want to auto-fix discovered issues? (yes/no): ").strip().lower()
+                if fix_issues == 'yes':
+                    fixed_files = self.fix_discovered_issues(analysis_results, files_found)
+            
             # Ask about Docker
             if self.docker_client:
                 run_docker = input("\n🐳 Do you want to build and run Docker image? (yes/no): ").strip().lower()
@@ -792,9 +1011,9 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
                     self.build_and_run_docker()
             
             # Ask about committing - ALWAYS ask, even if no issues
-            should_commit = input("\n📝 Do you want to commit the analysis report? (yes/no): ").strip().lower()
+            should_commit = input("\n📝 Do you want to commit the changes? (yes/no): ").strip().lower()
             if should_commit == 'yes':
-                self.commit_and_push(analysis_results, files_found)
+                self.commit_and_push(analysis_results, files_found, fixed_files)
             
             print(f"\n{'='*60}")
             print("✅ ANALYSIS COMPLETE!")
