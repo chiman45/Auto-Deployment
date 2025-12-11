@@ -93,3 +93,4 @@ origin = repo.remote(name="origin")
 origin.push()
 
 log_message("All fixes committed and pushed successfully.")
+#.\yaml_agent_venv\Scripts\python.exe main.py 
