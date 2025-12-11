@@ -9,7 +9,6 @@ import shutil
 import stat
 from pathlib import Path
 from typing import List, Dict, Any
-import google.generativeai as genai
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -30,7 +29,7 @@ class GitHubRepoAnalyzer:
     def __init__(self):
         self.repo_url = None
         self.github_token = None
-        self.gemini_api_key = None
+        self.ollama_model = "llama3"  # Default Ollama model
         self.local_repo_path = "./temp_repo"
         self.repo = None
         self.vectorstore = None
@@ -46,17 +45,38 @@ class GitHubRepoAnalyzer:
         # Load environment variables
         load_dotenv()
         
-        # Get Gemini API key from .env
-        self.gemini_api_key = os.getenv('GEMINI_API_KEY')
-        if not self.gemini_api_key:
-            print("❌ GEMINI_API_KEY not found in .env file!")
-            print("   Please create a .env file with: GEMINI_API_KEY=your_api_key_here")
+        # Check if Ollama is installed and running
+        print("🔍 Checking Ollama installation...")
+        try:
+            ollama_check = requests.get("http://localhost:11434/api/tags", timeout=5)
+            if ollama_check.status_code == 200:
+                models = ollama_check.json().get('models', [])
+                if models:
+                    print(f"✅ Ollama is running with {len(models)} models")
+                    # Use first available model or llama3
+                    available_models = [m['name'] for m in models]
+                    if 'llama3:latest' in available_models:
+                        self.ollama_model = 'llama3'
+                    elif 'codellama:latest' in available_models:
+                        self.ollama_model = 'codellama'
+                    elif 'mistral:latest' in available_models:
+                        self.ollama_model = 'mistral'
+                    else:
+                        self.ollama_model = available_models[0].split(':')[0]
+                    print(f"📦 Using model: {self.ollama_model}")
+                else:
+                    print("⚠️  No models found. Installing llama3...")
+                    subprocess.run(['ollama', 'pull', 'llama3'], check=True)
+                    self.ollama_model = 'llama3'
+            else:
+                raise Exception("Ollama not responding")
+        except Exception as e:
+            print(f"❌ Ollama not available: {e}")
+            print("\n💡 Install Ollama to use local models (no rate limits!):")
+            print("   1. Download from: https://ollama.ai")
+            print("   2. Install and run: ollama serve")
+            print("   3. Pull a model: ollama pull llama3")
             sys.exit(1)
-        
-        print("✅ Gemini API key loaded from .env")
-        
-        # Configure Gemini
-        genai.configure(api_key=self.gemini_api_key)
         
         # Get GitHub token from user
         self.github_token = input("\nEnter your GitHub Personal Access Token: ").strip()
@@ -215,73 +235,81 @@ class GitHubRepoAnalyzer:
         
         print(f"✅ RAG index built with {len(documents)} documents")
     
-    def analyze_with_gemini(self, file_path: str, content: str, file_type: str) -> Dict[str, Any]:
-        """Analyze file using Gemini API"""
+    def analyze_with_ollama(self, file_path: str, content: str, file_type: str) -> Dict[str, Any]:
+        """Analyze file using local Ollama model (no rate limits!)"""
         
+        # Shorter, more focused prompts for better JSON output
         prompts = {
-            'yaml': f"""Analyze this Kubernetes/YAML configuration file for:
-1. Syntax errors
-2. Logical errors (wrong selectors, missing fields, incorrect resource specs)
-3. Security issues (privileged containers, hostPath, etc.)
-4. Best practices violations
-5. Service label selector mismatches
-6. Resource limits and requests issues
-7. Advanced cluster-level configuration problems
+            'yaml': f"""Analyze this YAML file and return ONLY valid JSON in this exact format:
+{{"errors": ["error1", "error2"], "warnings": ["warning1"], "suggestions": ["suggestion1"], "severity": "high"}}
 
 File: {file_path}
+
 Content:
 {content}
 
-Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "suggestions": [], "severity": "low/medium/high/critical"}}""",
+Check for: syntax errors, missing fields, port issues, indentation. Return ONLY the JSON object.""",
             
-            'docker': f"""Analyze this Dockerfile for:
-1. Syntax errors
-2. Security vulnerabilities (running as root, exposed secrets, outdated base images)
-3. Build optimization issues
-4. Best practices violations
-5. Logical errors in commands
-6. Port exposure issues
+            'docker': f"""Analyze this Dockerfile and return ONLY valid JSON in this exact format:
+{{"errors": ["error1", "error2"], "warnings": ["warning1"], "suggestions": ["suggestion1"], "severity": "high"}}
 
 File: {file_path}
+
 Content:
 {content}
 
-Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "suggestions": [], "severity": "low/medium/high/critical"}}""",
+Check for: syntax errors, FROM statement issues, security problems. Return ONLY the JSON object.""",
             
-            'k8s': f"""Analyze this Kubernetes manifest for:
-1. API version compatibility
-2. Resource specification errors
-3. RBAC and security issues
-4. Network policy problems
-5. Service mesh configuration
-6. Ingress/egress rules
-7. ConfigMap/Secret references
-8. Volume mount issues
+            'k8s': f"""Analyze this Kubernetes manifest and return ONLY valid JSON in this exact format:
+{{"errors": ["error1", "error2"], "warnings": ["warning1"], "suggestions": ["suggestion1"], "severity": "high"}}
 
 File: {file_path}
+
 Content:
 {content}
 
-Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "suggestions": [], "severity": "low/medium/high/critical"}}"""
+Check for: apiVersion, resource specs, missing colons, port numbers. Return ONLY the JSON object."""
         }
         
         try:
-            # Use the latest Gemini model: gemini-2.0-flash-exp
-            model = genai.GenerativeModel('gemini-2.0-flash-exp')
+            # Use local Ollama model (no rate limits!)
             prompt = prompts.get(file_type, prompts['yaml'])
-            response = model.generate_content(prompt)
             
-            # Try to parse JSON from response
-            response_text = response.text
+            ollama_url = "http://localhost:11434/api/generate"
+            payload = {
+                "model": self.ollama_model,
+                "prompt": prompt,
+                "stream": False,
+                "format": "json"
+            }
+            
+            ollama_response = requests.post(ollama_url, json=payload, timeout=120)
+            ollama_response.raise_for_status()
+            
+            response_data = ollama_response.json()
+            response_text = response_data['response']
+            
             # Remove markdown code blocks if present
             if '```json' in response_text:
                 response_text = response_text.split('```json')[1].split('```')[0]
             elif '```' in response_text:
                 response_text = response_text.split('```')[1].split('```')[0]
             
-            return json.loads(response_text.strip())
+            # Parse JSON and validate structure
+            result = json.loads(response_text.strip())
+            
+            # Ensure all required keys exist
+            if not isinstance(result, dict):
+                result = {"errors": [], "warnings": [], "suggestions": [], "severity": "unknown"}
+            
+            result.setdefault('errors', [])
+            result.setdefault('warnings', [])
+            result.setdefault('suggestions', [])
+            result.setdefault('severity', 'unknown')
+            
+            return result
         except Exception as e:
-            print(f"⚠️  Gemini analysis failed for {file_path}: {e}")
+            print(f"⚠️  Ollama analysis failed for {file_path}: {e}")
             return {"errors": [], "warnings": [], "suggestions": [], "severity": "unknown"}
     
     def check_yaml_syntax(self, file_path: str) -> List[str]:
@@ -289,9 +317,48 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
         errors = []
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
-                yaml.safe_load_all(f)
-        except yaml.YAMLError as e:
-            errors.append(f"YAML syntax error in {file_path}: {str(e)}")
+                content = f.read()
+                # Try to parse YAML
+                try:
+                    docs = list(yaml.safe_load_all(content))
+                except yaml.YAMLError as e:
+                    errors.append(f"YAML syntax error: {str(e)}")
+                    return errors
+                
+                # Additional structural checks
+                lines = content.split('\n')
+                for i, line in enumerate(lines, 1):
+                    stripped = line.strip()
+                    
+                    # Check for missing colons after keys
+                    if stripped and not stripped.startswith('#') and not stripped.startswith('-'):
+                        # If line looks like a key but missing colon
+                        if stripped and not ':' in stripped and not stripped.startswith('|') and not stripped.startswith('>'):
+                            # Check if next line is indented (suggests missing colon)
+                            if i < len(lines):
+                                next_line = lines[i] if i < len(lines) else ""
+                                if next_line and len(next_line) - len(next_line.lstrip()) > len(line) - len(line.lstrip()):
+                                    errors.append(f"Line {i}: Missing colon ':' after key '{stripped}'")
+                    
+                    # Check for incomplete port definitions
+                    if 'port' in stripped and ':' in stripped:
+                        parts = stripped.split(':')
+                        if len(parts) == 2 and parts[1].strip() == '':
+                            errors.append(f"Line {i}: Incomplete port definition - missing port number")
+                    
+                    # Check for incomplete apiVersion
+                    if stripped.startswith('apiVersion') and ':' in stripped:
+                        parts = stripped.split(':', 1)
+                        if len(parts) == 2:
+                            version = parts[1].strip()
+                            if not version:
+                                errors.append(f"Line {i}: Missing apiVersion value")
+                            elif ' ' in version and '/' not in version:
+                                errors.append(f"Line {i}: Invalid apiVersion format - missing '/' (should be 'group/version')")
+                
+        except Exception as e:
+            errors.append(f"Could not check YAML: {str(e)}")
+        
         return errors
     
     def check_dockerfile_syntax(self, file_path: str) -> List[str]:
@@ -314,7 +381,75 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
             errors.append(f"Could not check Dockerfile: {e}")
         return errors
     
-    def fix_dockerfile(self, file_path: str) -> bool:
+    def fix_yaml_file(self, file_path: str) -> bool:
+        """Fix common YAML syntax errors"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            fixed = False
+            new_lines = []
+            
+            for i, line in enumerate(lines):
+                original_line = line
+                stripped = line.strip()
+                
+                # Fix missing colon after 'selector'
+                if stripped == 'selector':
+                    indent = len(line) - len(line.lstrip())
+                    new_lines.append(' ' * indent + 'selector:\n')
+                    fixed = True
+                    print(f"      ✅ Fixed line {i+1}: Added colon after 'selector'")
+                    continue
+                
+                # Fix apiVersion with space (apps/v1 written as apps /v1)
+                if 'apiVersion' in line and ':' in line:
+                    parts = line.split(':', 1)
+                    if len(parts) == 2:
+                        key = parts[0]
+                        value = parts[1].strip()
+                        # Remove spaces before /
+                        if ' /' in value:
+                            value = value.replace(' /', '/')
+                            indent = len(line) - len(line.lstrip())
+                            new_lines.append(' ' * indent + f'apiVersion: {value}\n')
+                            fixed = True
+                            print(f"      ✅ Fixed line {i+1}: Corrected apiVersion format")
+                            continue
+                
+                # Fix incomplete port in probes
+                if 'port:' in line and line.rstrip().endswith('port:'):
+                    # Check if this is in a probe context
+                    context_lines = ''.join(lines[max(0, i-5):i])
+                    if 'Probe' in context_lines:
+                        # Look for containerPort in nearby lines
+                        port_found = None
+                        for j in range(max(0, i-10), min(len(lines), i+10)):
+                            if 'containerPort:' in lines[j]:
+                                port_num = lines[j].split('containerPort:')[1].strip()
+                                if port_num.isdigit():
+                                    port_found = port_num
+                                    break
+                        
+                        if port_found:
+                            indent = len(line) - len(line.lstrip())
+                            new_lines.append(' ' * indent + f'port: {port_found}\n')
+                            fixed = True
+                            print(f"      ✅ Fixed line {i+1}: Added port number {port_found}")
+                            continue
+                
+                new_lines.append(original_line)
+            
+            if fixed:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.writelines(new_lines)
+                return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"      ⚠️  Could not fix YAML file: {e}")
+            return False
         """Fix common Dockerfile syntax errors"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -358,6 +493,114 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
             print(f"      ⚠️  Could not fix Dockerfile: {e}")
             return False
     
+    def fix_with_gemini(self, file_path: str, errors: List[str], file_type: str) -> bool:
+        """Use local Ollama model to fix file errors (no rate limits!)"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                original_content = f.read()
+            
+            # Create fix prompt
+            error_list = '\n'.join([f"- {error}" for error in errors])
+            
+            # Enhanced prompt for better results
+            if file_type == 'docker':
+                specific_instructions = """
+- Each command (FROM, RUN, COPY, etc.) must be on a single line
+- Do not split FROM statements across multiple lines
+- Ensure proper Dockerfile syntax
+- Keep comments on their own lines"""
+            elif file_type in ['yaml', 'k8s']:
+                specific_instructions = """
+- Maintain proper YAML indentation (2 spaces per level)
+- Ensure all keys have colons (:)
+- Port numbers must be valid integers
+- No trailing spaces after colons without values"""
+            else:
+                specific_instructions = "- Follow best practices for this file type"
+            
+            prompt = f"""Fix the following errors in this {file_type} file. Return ONLY the corrected file content, nothing else.
+
+ERRORS TO FIX:
+{error_list}
+
+SPECIFIC REQUIREMENTS:{specific_instructions}
+
+ORIGINAL FILE CONTENT:
+{original_content}
+
+CRITICAL: 
+1. Return ONLY the fixed file content
+2. Do NOT add explanations, comments, or markdown
+3. Do NOT wrap in code blocks or backticks
+4. Preserve the original structure as much as possible"""
+            
+            # Use local Ollama model (no rate limits!)
+            ollama_url = "http://localhost:11434/api/generate"
+            payload = {
+                "model": self.ollama_model,
+                "prompt": prompt,
+                "stream": False
+            }
+            
+            ollama_response = requests.post(ollama_url, json=payload, timeout=120)
+            ollama_response.raise_for_status()
+            
+            response_data = ollama_response.json()
+            fixed_content = response_data['response'].strip()
+            
+            # Remove markdown code blocks if present
+            if '```' in fixed_content:
+                # Extract content between code fences
+                lines = fixed_content.split('\n')
+                in_code_block = False
+                clean_lines = []
+                
+                for line in lines:
+                    if line.strip().startswith('```'):
+                        in_code_block = not in_code_block
+                        continue
+                    if in_code_block or not any(lines[0].strip().startswith('```')):
+                        clean_lines.append(line)
+                
+                fixed_content = '\n'.join(clean_lines)
+            
+            # Post-process Dockerfile to ensure FROM statements are not split
+            if file_type == 'docker':
+                fixed_lines = fixed_content.split('\n')
+                final_lines = []
+                i = 0
+                
+                while i < len(fixed_lines):
+                    line = fixed_lines[i]
+                    
+                    # If we find a standalone FROM, merge with next non-empty line
+                    if line.strip() == 'FROM' and i + 1 < len(fixed_lines):
+                        next_idx = i + 1
+                        while next_idx < len(fixed_lines) and not fixed_lines[next_idx].strip():
+                            next_idx += 1
+                        
+                        if next_idx < len(fixed_lines):
+                            # Merge FROM with the base image
+                            base_image = fixed_lines[next_idx].strip()
+                            final_lines.append(f"FROM {base_image}")
+                            i = next_idx + 1
+                            continue
+                    
+                    final_lines.append(line)
+                    i += 1
+                
+                fixed_content = '\n'.join(final_lines)
+            
+            # Write fixed content
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(fixed_content)
+            
+            return True
+            
+        except Exception as e:
+            print(f"      ⚠️  Ollama fix failed: {e}")
+            return False
+    
     def fix_discovered_issues(self, analysis_results, files_found) -> List[str]:
         """Fix issues found during analysis"""
         fixed_files = []
@@ -369,24 +612,57 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
         for result in analysis_results:
             file_path = os.path.join(self.local_repo_path, result['file'])
             
+            # Skip if no errors to fix
+            if not result['analysis']['errors']:
+                continue
+            
+            print(f"\n📝 Attempting to fix {result['file']}...")
+            print(f"   Errors found: {len(result['analysis']['errors'])}")
+            
+            # Try pattern-based fixes first
+            pattern_fixed = False
+            
             # Fix Dockerfile issues
             if result['type'] == 'docker':
-                print(f"\n📝 Checking if {result['file']} can be fixed...")
-                
-                # Check for FROM statement errors
                 has_from_error = any('FROM' in str(error) for error in result['analysis']['errors'])
-                
                 if has_from_error:
-                    if self.fix_dockerfile(file_path):
-                        fixed_files.append(result['file'])
-                        print(f"   ✅ Fixed {result['file']}")
-                    else:
-                        print(f"   ⚠️  Could not auto-fix {result['file']}")
+                    pattern_fixed = self.fix_dockerfile(file_path)
+            
+            # Fix YAML/K8s issues
+            elif result['type'] in ['yaml', 'k8s']:
+                errors = result['analysis']['errors']
+                has_fixable_error = any(
+                    'Missing colon' in str(error) or 
+                    'apiVersion' in str(error) or 
+                    'port' in str(error)
+                    for error in errors
+                )
+                
+                if has_fixable_error:
+                    pattern_fixed = self.fix_yaml_file(file_path)
+            
+            # If pattern-based fix worked
+            if pattern_fixed:
+                fixed_files.append(result['file'])
+                print(f"   ✅ Fixed using pattern matching")
+                continue
+            
+            # If pattern-based fix failed, use Gemini AI
+            print(f"   🤖 Trying AI-powered fix...")
+            time.sleep(2)  # Rate limiting
+            
+            if self.fix_with_gemini(file_path, result['analysis']['errors'], result['type']):
+                fixed_files.append(result['file'])
+                print(f"   ✅ Fixed using Gemini AI")
+            else:
+                print(f"   ❌ Could not fix {result['file']}")
         
         if fixed_files:
-            print(f"\n✅ Fixed {len(fixed_files)} file(s)")
+            print(f"\n✅ Successfully fixed {len(fixed_files)} file(s)")
+            for file in fixed_files:
+                print(f"   - {file}")
         else:
-            print(f"\n⚠️  No files could be auto-fixed")
+            print(f"\n⚠️  No files could be fixed")
         
         return fixed_files
     
@@ -397,14 +673,55 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
         suggestions = []
         
         try:
-            docs = list(yaml.safe_load_all(content))
+            # First check for basic YAML parsing
+            try:
+                docs = list(yaml.safe_load_all(content))
+            except yaml.YAMLError as e:
+                errors.append(f"YAML parsing failed: {str(e)}")
+                return {
+                    "errors": errors,
+                    "warnings": warnings,
+                    "suggestions": suggestions,
+                    "severity": "critical"
+                }
             
+            # Line-by-line analysis for common issues
+            lines = content.split('\n')
+            for i, line in enumerate(lines, 1):
+                stripped = line.strip()
+                
+                # Check for missing colons (common error)
+                if stripped.startswith('selector') and ':' not in stripped:
+                    errors.append(f"Line {i}: Missing colon after 'selector'")
+                
+                # Check for incomplete port definitions
+                if 'port:' in line:
+                    parts = line.split('port:', 1)
+                    if len(parts) == 2:
+                        port_value = parts[1].strip()
+                        if not port_value or not port_value[0].isdigit():
+                            errors.append(f"Line {i}: Missing or invalid port number after 'port:'")
+                
+                # Check for space issues in apiVersion
+                if stripped.startswith('apiVersion') and ' ' in stripped:
+                    if stripped.count(':') > 0:
+                        version_part = stripped.split(':', 1)[1].strip()
+                        if ' ' in version_part:
+                            errors.append(f"Line {i}: apiVersion has invalid format - contains spaces")
+            
+            # Parse K8s specific checks if YAML is valid
             for doc in docs:
                 if not doc:
                     continue
                     
                 # K8s specific checks
                 if 'kind' in doc:
+                    # Check apiVersion format
+                    if 'apiVersion' in doc:
+                        api_version = str(doc['apiVersion'])
+                        if ' ' in api_version:
+                            errors.append(f"apiVersion '{api_version}' is invalid - contains spaces")
+                    
                     # Check for resource limits
                     if doc['kind'] == 'Deployment':
                         if 'spec' in doc and 'template' in doc['spec']:
@@ -412,10 +729,24 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
                             for container in containers:
                                 if 'resources' not in container:
                                     warnings.append(f"Container '{container.get('name', 'unknown')}' missing resource limits")
+                                else:
+                                    # Check if resources are properly defined
+                                    resources = container.get('resources', {})
+                                    if resources and isinstance(resources, dict):
+                                        if 'requests' in resources:
+                                            suggestions.append(f"Container '{container.get('name', 'unknown')}' has resource requests defined")
                                 
                                 # Check for security context
                                 if 'securityContext' not in container:
                                     suggestions.append(f"Consider adding securityContext for container '{container.get('name', 'unknown')}'")
+                                
+                                # Check probes
+                                if 'livenessProbe' in container:
+                                    probe = container['livenessProbe']
+                                    if isinstance(probe, dict) and 'httpGet' in probe:
+                                        http_get = probe['httpGet']
+                                        if 'port' not in http_get or not http_get.get('port'):
+                                            errors.append(f"livenessProbe in container '{container.get('name', 'unknown')}' has missing or invalid port")
                     
                     # Check for security context at pod level
                     if doc['kind'] in ['Deployment', 'Pod', 'DaemonSet', 'StatefulSet']:
@@ -429,7 +760,7 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
         except Exception as e:
             errors.append(f"Static analysis error: {str(e)}")
         
-        severity = "high" if errors else ("medium" if warnings else "low")
+        severity = "critical" if errors else ("high" if warnings else "low")
         
         return {
             "errors": errors,
@@ -534,37 +865,35 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
                 except Exception as e:
                     print(f"  ⚠️  Error in static analysis {relative_path}: {e}")
             
-            # Add delay before Gemini API call (only for deep analysis)
-            if i > 0 and i < len(files_to_analyze):
-                time.sleep(3)  # 3 second delay between API calls
+            # No delay needed for local Ollama (no rate limits!)
             
-            # Deep analysis with Gemini (with retry logic)
+            # Deep analysis with local Ollama model
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
                 
-                gemini_analysis = self.analyze_with_gemini(relative_path, content, file_type)
+                ollama_analysis = self.analyze_with_ollama(relative_path, content, file_type)
                 
-                if gemini_analysis and (gemini_analysis['errors'] or gemini_analysis['warnings']):
+                if ollama_analysis and (ollama_analysis['errors'] or ollama_analysis['warnings']):
                     # Check if we already have results for this file
                     existing = next((r for r in analysis_results if r['file'] == relative_path), None)
                     
                     if existing:
                         # Merge results
-                        existing['analysis']['errors'].extend(gemini_analysis['errors'])
-                        existing['analysis']['warnings'].extend(gemini_analysis['warnings'])
-                        existing['analysis']['suggestions'].extend(gemini_analysis['suggestions'])
+                        existing['analysis']['errors'].extend(ollama_analysis['errors'])
+                        existing['analysis']['warnings'].extend(ollama_analysis['warnings'])
+                        existing['analysis']['suggestions'].extend(ollama_analysis['suggestions'])
                     else:
                         analysis_results.append({
                             'file': relative_path,
                             'type': file_type,
-                            'analysis': gemini_analysis
+                            'analysis': ollama_analysis
                         })
                     
                     # Add to errors list
-                    for error in gemini_analysis['errors']:
+                    for error in ollama_analysis['errors']:
                         self.errors_found.append(f"[{relative_path}] ERROR: {error}")
-                    for warning in gemini_analysis['warnings']:
+                    for warning in ollama_analysis['warnings']:
                         self.errors_found.append(f"[{relative_path}] WARNING: {warning}")
             
             except Exception as e:
@@ -588,8 +917,12 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
         if analysis_results:
             for result in analysis_results:
                 print(f"\n📄 File: {result['file']}")
-                print(f"   Type: {result['type']}")
-                print(f"   Severity: {result['analysis']['severity']}")
+                print(f"   Type: {result.get('type', 'unknown')}")
+                if 'analysis' in result and isinstance(result['analysis'], dict):
+                    print(f"   Severity: {result['analysis'].get('severity', 'unknown')}")
+                else:
+                    print(f"   Severity: unknown")
+                    result['analysis'] = {"errors": [], "warnings": [], "suggestions": [], "severity": "unknown"}
                 
                 if result['analysis']['errors']:
                     print(f"   ❌ Errors ({len(result['analysis']['errors'])}):")
@@ -997,23 +1330,30 @@ Provide detailed analysis in JSON format with: {{"errors": [], "warnings": [], "
                     elif file.lower() == 'dockerfile' or file.endswith('.dockerfile'):
                         files_found.append(('Dockerfile', relative_path))
             
-            # Fix discovered issues
+            # Fix discovered issues automatically
             fixed_files = []
-            if analysis_results:
-                fix_issues = input("\n🔧 Do you want to auto-fix discovered issues? (yes/no): ").strip().lower()
-                if fix_issues == 'yes':
+            try:
+                if analysis_results:
+                    print("\n🔧 Auto-fixing discovered issues...")
                     fixed_files = self.fix_discovered_issues(analysis_results, files_found)
+            except Exception as e:
+                print(f"⚠️  Error during fixing: {e}")
             
             # Ask about Docker
-            if self.docker_client:
-                run_docker = input("\n🐳 Do you want to build and run Docker image? (yes/no): ").strip().lower()
-                if run_docker == 'yes':
-                    self.build_and_run_docker()
+            try:
+                if self.docker_client:
+                    run_docker = input("\n🐳 Do you want to build and run Docker image? (yes/no): ").strip().lower()
+                    if run_docker == 'yes':
+                        self.build_and_run_docker()
+            except Exception as e:
+                print(f"⚠️  Docker error: {e}")
             
-            # Ask about committing - ALWAYS ask, even if no issues
-            should_commit = input("\n📝 Do you want to commit the changes? (yes/no): ").strip().lower()
-            if should_commit == 'yes':
-                self.commit_and_push(analysis_results, files_found, fixed_files)
+            # Always commit if there are fixes or analysis results
+            try:
+                if analysis_results or fixed_files or files_found:
+                    self.commit_and_push(analysis_results, files_found, fixed_files)
+            except Exception as e:
+                print(f"⚠️  Commit error: {e}")
             
             print(f"\n{'='*60}")
             print("✅ ANALYSIS COMPLETE!")
