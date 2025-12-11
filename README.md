@@ -353,8 +353,8 @@ MIT License - feel free to use this in your projects!
 ---
 
 ## Collaborator and Special Thanks 
-Tejasvi Sinha
-Shreya Kumari
+--Tejasvi Sinha
+--Shreya Kumari
 
 
 ## 🙏 Credits
