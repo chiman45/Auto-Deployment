@@ -1,107 +1,324 @@
-# 🚀 GitHub Repository Analyzer Agent
+# Custom CI/CD Toolkit
 
-<div align="center">
+A two-in-one DevOps toolkit:
 
-### **Your AI-Powered DevOps Detective** 🕵️‍♂️
-
-*Automatically clone, analyze, fix, and deploy GitHub repositories with the power of LOCAL AI!*
-
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
-[![Ollama](https://img.shields.io/badge/Powered%20by-Ollama-orange.svg)](https://ollama.ai)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://docker.com)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![No Rate Limits](https://img.shields.io/badge/Rate%20Limits-NONE-brightgreen.svg)]()
-
-</div>
+1. **`deployagent`** — CLI tool to deploy any Dockerized app to AWS ECS with a single command
+2. **GitHub Repo Analyzer** — AI-powered tool that clones, analyzes, and auto-fixes Kubernetes/Docker configs
 
 ---
 
-## 🎯 What Does This Beast Do?
+## Table of Contents
 
-Imagine having a super-intelligent DevOps engineer who:
-- 🔍 **Scans** your entire GitHub repository in seconds
-- 🧠 **Analyzes** Dockerfiles, Kubernetes manifests, and YAML configs with **local AI models**
-- 🔧 **Auto-fixes** common errors (yes, really!)
-- 🐳 **Builds & runs** your Docker containers automatically
-- 📝 **Creates** detailed analysis reports
-- 🚀 **Pushes** fixes to a new branch with a PR ready to go
-- ⚡ **NO API COSTS** - Runs 100% locally with Ollama!
-- 🚫 **NO RATE LIMITS** - Unlimited analysis and fixes!
-
-**All with a few keystrokes!** ⚡
-
----
-
-## ✨ Features That'll Blow Your Mind
-
-### 🔎 **Deep Repository Analysis**
-- Clones any GitHub repo with authentication
-- Builds a RAG (Retrieval-Augmented Generation) index for intelligent search
-- Scans for Dockerfiles, docker-compose.yml, and Kubernetes manifests
-- Identifies YAML, Docker, and K8s configuration files
-
-### 🤖 **AI-Powered Error Detection (100% Local!)**
-Powered by **Ollama** with local models (llama3, codellama, mistral), it detects:
-- ❌ Syntax errors in Dockerfiles and YAML files
-- ⚠️ Security vulnerabilities (privileged containers, exposed secrets, etc.)
-- 💡 Best practices violations
-- 🔐 RBAC and security issues in K8s manifests
-- 📊 Missing resource limits and requests
-- 🎯 Service selector mismatches
-- 🏃 **Unlimited requests** - analyze as many files as you want!
-- 🔒 **Complete privacy** - your code never leaves your machine!
-
-### 🛠️ **Auto-Fix Magic**
-The tool can **automatically fix**:
-- Split `FROM` statements in Dockerfiles
-- Missing colons in YAML files
-- Incomplete port definitions
-- API version formatting issues
-- Common syntax errors
-- **Uses AI to fix complex errors pattern matching can't handle!**
-
-### 🐳 **Docker Automation**
-- Detects `docker-compose.yml` or standalone Dockerfiles
-- Auto-creates missing `.env` files
-- Builds and runs containers automatically
-- Opens your app in the browser (it just knows! 🧙‍♂️)
-
-### 📊 **Beautiful Reports**
-Generates comprehensive `ANALYSIS_REPORT.md` with:
-- Files discovered
-- Issues found (errors, warnings, suggestions)
-- Severity levels
-- Actionable recommendations
-
-### 🌿 **Git Integration**
-- Creates new branches automatically
-- Commits fixed files + analysis reports
-- Pushes to GitHub with PR link ready
-- Clean, professional commit messages
+- [deployagent — AWS Deployment CLI](#deployagent--aws-deployment-cli)
+  - [How It Works](#how-it-works)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+  - [AWS Setup](#aws-setup)
+  - [Configuration](#configuration)
+  - [Commands](#commands)
+  - [Full Deployment Workflow](#full-deployment-workflow)
+- [GitHub Repo Analyzer](#github-repo-analyzer)
+  - [What It Does](#what-it-does)
+  - [Analyzer Setup](#analyzer-setup)
+  - [Running the Analyzer](#running-the-analyzer)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
 
 ---
 
-## 🚀 Quick Start
+## deployagent — AWS Deployment CLI
+
+Deploy any Dockerized project to AWS ECS Fargate with four commands: `plan`, `apply`, `rollback`, `status`.
+
+### How It Works
+
+```
+Your project + deploy.yaml
+        ↓
+deployagent apply
+        ↓
+1. Builds Docker image
+2. Pushes to ECR
+3. Registers new ECS task definition
+4. Updates ECS service
+5. Applies CloudFormation changes (optional)
+6. Waits for service stability
+7. Runs health check
+8. Saves deploy snapshot to SQLite (for rollback)
+```
+
+If the health check fails, it automatically rolls back to the last known-good state.
+
+---
 
 ### Prerequisites
 
-```bash
-# You'll need:
-- Python 3.8+
-- Docker Desktop (optional, for container testing)
-- GitHub Personal Access Token
-- Ollama (FREE - runs AI models locally!)
-```
+- Python 3.11+
+- Docker Desktop (must be running during deploy)
+- AWS account with IAM user credentials
+- AWS CLI installed
+
+---
 
 ### Installation
 
-**Step 1: Install Ollama**
+```bash
+# Clone the repo
+git clone https://github.com/chiman45/Custom-CICD.git
+cd Custom-CICD
+
+# Install deployagent
+pip install -e .
+
+# Verify installation
+deployagent --help
+```
+
+---
+
+### AWS Setup
+
+#### 1. Configure credentials
+
+Create a `.env` file in the project root (already gitignored):
+
+```env
+AWS_ACCESS_KEY_ID=your_access_key_here
+AWS_SECRET_ACCESS_KEY=your_secret_key_here
+AWS_DEFAULT_REGION=us-east-1
+```
+
+Or use the AWS CLI:
+
+```bash
+aws configure
+```
+
+Verify credentials work:
+
+```bash
+aws sts get-caller-identity
+```
+
+#### 2. Required IAM permissions
+
+Your IAM user needs these permissions (attach in AWS Console → IAM → Users → your user → Add permissions):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeServices", "ecs:DescribeTaskDefinition",
+        "ecs:RegisterTaskDefinition", "ecs:UpdateService",
+        "ecr:GetAuthorizationToken", "ecr:BatchCheckLayerAvailability",
+        "ecr:PutImage", "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart", "ecr:CompleteLayerUpload",
+        "ecr:DescribeImages", "ecr:DescribeRepositories",
+        "cloudformation:DescribeStacks", "cloudformation:CreateChangeSet",
+        "cloudformation:DescribeChangeSet", "cloudformation:ExecuteChangeSet",
+        "cloudformation:UpdateStack",
+        "logs:DescribeLogStreams", "logs:GetLogEvents",
+        "iam:PassRole"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+#### 3. Create AWS resources (one-time setup)
+
+Run these once before your first deploy:
+
+```bash
+# Get your AWS account ID
+aws sts get-caller-identity --query Account --output text
+
+# Create ECR repository (replace YOUR_ACCOUNT_ID)
+aws ecr create-repository --repository-name my-app --region us-east-1
+
+# Create ECS cluster
+aws ecs create-cluster --cluster-name my-cluster --region us-east-1
+
+# Create IAM execution role for ECS tasks
+aws iam create-role \
+  --role-name ecsTaskExecutionRole \
+  --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+
+aws iam attach-role-policy \
+  --role-name ecsTaskExecutionRole \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+# Get your default VPC and subnet
+VPC=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query "Vpcs[0].VpcId" --output text)
+SUBNET=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC --query "Subnets[0].SubnetId" --output text)
+SG=$(aws ec2 describe-security-groups --filters Name=vpc-id,Values=$VPC Name=group-name,Values=default --query "SecurityGroups[0].GroupId" --output text)
+
+echo "VPC: $VPC | Subnet: $SUBNET | SG: $SG"
+
+# Create CloudWatch log group
+aws logs create-log-group --log-group-name /ecs/my-app-task --region us-east-1
+
+# Register placeholder task definition (replace YOUR_ACCOUNT_ID)
+aws ecs register-task-definition \
+  --family my-app-task \
+  --network-mode awsvpc \
+  --requires-compatibilities FARGATE \
+  --cpu 256 --memory 512 \
+  --execution-role-arn arn:aws:iam::YOUR_ACCOUNT_ID:role/ecsTaskExecutionRole \
+  --container-definitions '[{"name":"my-app","image":"YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/my-app:latest","essential":true,"portMappings":[{"containerPort":8080,"protocol":"tcp"}],"logConfiguration":{"logDriver":"awslogs","options":{"awslogs-group":"/ecs/my-app-task","awslogs-region":"us-east-1","awslogs-stream-prefix":"ecs"}}}]'
+
+# Create ECS service (replace SUBNET and SG with values from above)
+aws ecs create-service \
+  --cluster my-cluster \
+  --service-name my-app-service \
+  --task-definition my-app-task \
+  --desired-count 1 \
+  --launch-type FARGATE \
+  --network-configuration "awsvpcConfiguration={subnets=[SUBNET],securityGroups=[SG],assignPublicIp=ENABLED}"
+```
+
+---
+
+### Configuration
+
+Add a `deploy.yaml` to your project root:
+
+```yaml
+service: my-app                  # label used for deploy history
+region: us-east-1                # AWS region
+cluster: my-cluster              # ECS cluster name
+
+image:
+  repository: 123456789.dkr.ecr.us-east-1.amazonaws.com/my-app   # ECR repo URI
+  tag: latest                    # image tag — use git SHA for unique deploys
+  dockerfile: ./Dockerfile       # path to your Dockerfile
+  build_context: .               # Docker build context
+
+ecs:
+  service_name: my-app-service   # ECS service name
+  task_family: my-app-task       # task definition family
+  container_name: my-app         # container name inside task definition
+  container_port: 8080           # port your app listens on
+  cpu: 256                       # 256 = 0.25 vCPU
+  memory: 512                    # MB
+  desired_count: 1               # number of running containers
+
+# Optional — remove if not using CloudFormation
+cloudformation:
+  stack_name: my-app-infra
+  template_file: ./infra/template.yaml
+  parameters:
+    Environment: production
+
+health:
+  endpoint: /health
+  timeout: 30
+  retries: 5
+```
+
+**Tip:** Use git commit SHA as the tag so every deploy is unique and traceable:
+
+```bash
+# Linux/macOS
+TAG=$(git rev-parse --short HEAD)
+sed -i "s/tag: .*/tag: $TAG/" deploy.yaml
+
+# Windows PowerShell
+$TAG = git rev-parse --short HEAD
+(Get-Content deploy.yaml) -replace 'tag: .*', "tag: $TAG" | Set-Content deploy.yaml
+```
+
+---
+
+### Commands
+
+#### `plan` — Dry run, no AWS changes
+```bash
+deployagent plan deploy.yaml
+```
+Shows a colour-coded table of what will be created, updated, or left unchanged.
+
+#### `apply` — Execute deployment
+```bash
+# With confirmation prompt
+deployagent apply deploy.yaml
+
+# Skip prompt (for CI/CD pipelines)
+deployagent apply deploy.yaml --yes
+```
+
+#### `status` — Check service health
+```bash
+# Live health check
+deployagent status deploy.yaml
+
+# View full deploy history
+deployagent status deploy.yaml --history
+```
+
+#### `rollback` — Revert to previous deploy
+```bash
+# Revert to last successful deploy
+deployagent rollback deploy.yaml
+
+# Revert two deploys back
+deployagent rollback deploy.yaml --steps 2
+```
+
+---
+
+### Full Deployment Workflow
+
+```bash
+# 1. Go to your project
+cd /path/to/your-project
+
+# 2. Copy deploy.yaml and fill in your AWS resource names
+cp /path/to/Custom-CICD/deploy.yaml ./deploy.yaml
+
+# 3. Tag with current commit
+TAG=$(git rev-parse --short HEAD)
+sed -i "s/tag: .*/tag: $TAG/" deploy.yaml   # Linux/macOS
+
+# 4. Preview changes
+deployagent plan deploy.yaml
+
+# 5. Deploy
+deployagent apply deploy.yaml
+
+# 6. Verify health
+deployagent status deploy.yaml
+
+# 7. If something goes wrong
+deployagent rollback deploy.yaml
+```
+
+---
+
+## GitHub Repo Analyzer
+
+AI-powered tool that clones any GitHub repository, analyzes Dockerfiles and Kubernetes manifests for errors, auto-fixes common issues, and commits the fixes to a new branch.
+
+### What It Does
+
+- Clones any public or private GitHub repository
+- Builds a RAG (Retrieval-Augmented Generation) search index over the codebase
+- Detects errors in Dockerfiles, docker-compose files, and Kubernetes YAML
+- Auto-fixes common issues using pattern matching and local AI (Ollama)
+- Generates a detailed `ANALYSIS_REPORT.md`
+- Commits fixes and pushes to a new branch with a PR link
+
+### Analyzer Setup
+
+#### 1. Install Ollama (local AI — free, no API key needed)
 
 ```bash
 # Windows
 winget install Ollama.Ollama
-
-# Or download from: https://ollama.ai/download
 
 # macOS
 brew install ollama
@@ -110,507 +327,93 @@ brew install ollama
 curl -fsSL https://ollama.ai/install.sh | sh
 ```
 
-**Step 2: Pull AI Models**
+Pull the required models:
 
 ```bash
-# Recommended: Install all three for best results
-ollama pull llama3      # General purpose (8B params)
-ollama pull codellama   # Best for code analysis (7B params)
-ollama pull mistral     # Fast and efficient (7.2B params)
-
-# Verify installation
-curl http://localhost:11434/api/tags
+ollama pull llama3       # general analysis
+ollama pull codellama    # code and Dockerfile analysis
+ollama pull mistral      # fast scanning
 ```
 
-**Step 3: Install Python Dependencies**
+#### 2. Install Python dependencies
 
 ```bash
-# 1. Clone this repo
-git clone https://github.com/yourusername/github-repo-analyzer.git
-cd github-repo-analyzer
-
-# 2. Install dependencies
 pip install -r requirements.txt
-
-# 3. Run the magic! 🎩✨
-python new.py
 ```
 
-### First Run
+#### 3. Set up `.env`
+
+```env
+GITHUB_TOKEN=ghp_your_github_personal_access_token
+```
+
+Create a GitHub token at: https://github.com/settings/tokens (needs `repo` scope)
+
+---
+
+### Running the Analyzer
 
 ```bash
 python new.py
 ```
 
-You'll see:
-```
-============================================================
-GitHub Repository Analyzer Agent
-============================================================
-🔍 Checking Ollama installation...
-✅ Ollama is running with 3 models
-📦 Using model: llama3
-```
+You will be prompted for:
+1. GitHub repository URL (e.g. `https://github.com/username/my-project`)
+2. Whether to build and run Docker containers after analysis
+3. A branch name and commit message for the fixes
 
-You'll be prompted for:
-1. **GitHub Personal Access Token** - [Create one here](https://github.com/settings/tokens)
-2. **Repository URL** - Any public/private GitHub repo you have access to
-
-Then sit back and watch the magic happen! 🍿
+The tool will:
+1. Clone the repository
+2. Scan all Dockerfiles, YAML, and K8s manifests
+3. Report all issues with severity levels
+4. Auto-fix what it can
+5. Save an `ANALYSIS_REPORT.md` in the repo
+6. Push fixes to your chosen branch
 
 ---
 
-## 📖 Usage Examples
+## Troubleshooting
 
-### Example 1: Analyze a Kubernetes Project
-
-```bash
-$ python new.py
-
-GitHub Repository Analyzer Agent
-============================================================
-🔍 Checking Ollama installation...
-✅ Ollama is running with 3 models
-📦 Using model: llama3
-
-Enter your GitHub Personal Access Token: ghp_xxxxxxxxxxxx
-Enter GitHub repository URL: https://github.com/username/k8s-project
-
-🔄 Cloning repository...
-✅ Repository cloned successfully
-
-🔄 Building RAG index...
-✅ RAG index built with 25 documents
-
-🔍 Analyzing repository files...
-  📄 Analyzing: deployment.yaml
-  📄 Analyzing: service.yaml
-  📄 Analyzing: ingress.yaml
-
-============================================================
-FILES DISCOVERED
-============================================================
-  YAML: k8s/deployment.yaml
-  YAML: k8s/service.yaml
-  YAML: k8s/ingress.yaml
-
-✅ All files analyzed - 3 warnings, 5 suggestions found!
-
-🔧 Auto-fixing discovered issues...
-
-============================================================
-FIXING DISCOVERED ISSUES
-============================================================
-
-📝 Attempting to fix k8s/deployment.yaml...
-   Errors found: 2
-   ✅ Fixed using pattern matching
-
-📝 Attempting to fix k8s/service.yaml...
-   Errors found: 1
-   🤖 Trying AI-powered fix with local model...
-   ✅ Fixed using local AI (Ollama)
-
-✅ Successfully fixed 2 file(s)
-   - k8s/deployment.yaml
-   - k8s/service.yaml
-
-============================================================
-CREATING ANALYSIS REPORT
-============================================================
-
-✅ Analysis report saved to: ANALYSIS_REPORT.md
-
-============================================================
-COMMIT TO REPOSITORY
-============================================================
-
-Enter new branch name (e.g., 'analysis-report'): ai-fixes
-Enter commit message: Fix deployment and service configurations
-
-🔀 Creating branch: ai-fixes
-💾 Committing changes...
-📤 Pushing to remote...
-
-✅ Successfully pushed to branch: ai-fixes
-🔗 Create a pull request to merge these changes
-📝 PR URL: https://github.com/username/k8s-project/pull/new/ai-fixes
-```
-
-### Example 2: Build & Run Docker App
-
-```bash
-🐳 Do you want to build and run Docker image? (yes/no): yes
-
-🐳 Found docker-compose.yml!
-🔨 Building services with docker-compose...
-✅ Docker Compose services built and running!
-✅ Service found on port 3000
-🌐 Opening http://localhost:3000 in browser...
-
-✅ Your app is now running!
-```
+| Error | Fix |
+|-------|-----|
+| `docker: error during connect` | Start Docker Desktop |
+| `AccessDeniedException` on AWS | Add missing IAM permissions (see AWS Setup section) |
+| `Nothing to deploy` in plan | Change the image tag — same tag = no change detected |
+| `Failed to connect to github.com port 443` | Check internet connection, disable VPN |
+| `cannot pull with rebase: You have unstaged changes` | Run `git stash` before `git pull` |
+| `Ollama not available` | Run `ollama serve` then `ollama pull llama3` |
+| `Can't remove temp_repo (Windows)` | Run `Remove-Item -Recurse -Force ./temp_repo` |
 
 ---
 
-## 🎨 What Gets Analyzed?
-
-| File Type | What We Check |
-|-----------|---------------|
-| **Dockerfiles** | Syntax errors, security issues, multi-stage builds, base image vulnerabilities, exposed secrets, split FROM statements |
-| **docker-compose.yml** | Service definitions, volume mounts, network configs, environment variables, port definitions |
-| **Kubernetes YAML** | API versions, resource limits, security contexts, RBAC, selectors, probes, missing colons |
-| **ConfigMaps/Secrets** | References, data structures, naming conventions, YAML syntax |
-| **Ingress/Services** | Port mappings, selectors, load balancer configs, incomplete port definitions |
-
----
-
-## 🤖 Ollama Models Used
-
-The tool intelligently uses different models for different tasks:
-
-| Model | Best For | Parameters | Speed |
-|-------|----------|------------|-------|
-| **llama3** | General analysis, YAML configs | 8B | Medium |
-| **codellama** | Dockerfile analysis, code fixing | 7B | Medium |
-| **mistral** | Quick scanning, fast checks | 7.2B | Fast |
-
-**Currently using:** `llama3` for all tasks (can be configured for task-specific models)
-
----
-
-## 📝 Sample Analysis Report
-
-```markdown
-# Repository Analysis Report
-
-## Files Discovered
-- **Dockerfile**: `Dockerfile`
-- **YAML**: `k8s/deployment.yaml`
-- **YAML**: `k8s/service.yaml`
-
-## Summary
-- Total files analyzed: 3
-- Total issues found: 8
-
-## Detailed Analysis
-
-### Dockerfile
-
-**Type:** docker  
-**Severity:** high  
-
-#### ❌ Errors
-- Line 2: FROM statement is incomplete - missing base image
-
-#### ⚠️ Warnings
-- Running as root user - security risk
-- No HEALTHCHECK instruction
-
-#### 💡 Suggestions
-- Use multi-stage builds to reduce image size
-- Pin base image to specific version
-
----
-
-### k8s/deployment.yaml
-
-**Type:** k8s  
-**Severity:** medium  
-
-#### ⚠️ Warnings
-- Container 'webapp' missing resource limits
-- Missing pod-level security context
-
-#### 💡 Suggestions
-- Add readiness and liveness probes
-- Consider using HPA for auto-scaling
-```
-
----
-
-## 🛠️ Configuration
-
-### Environment Variables
-
-Create a `.env` file:
-
-```bash
-# Required
-GEMINI_API_KEY=your_gemini_api_key_here
-
-# Optional (for future features)
-GITHUB_TOKEN=ghp_your_token_here
-```
-
-### Advanced Options
-
-Edit `analyzer.py` to customize:
-- **File extensions** to scan (line 192)
-- **Docker ports** to check (line 600)
-- **Analysis prompts** for Gemini (lines 248-283)
-- **ChromaDB settings** (line 224)
-
----
-
-## 🎯 Pro Tips
-
-### Tip 1: Use with CI/CD
-```yaml
-# .github/workflows/analyze.yml
-name: Auto Analyze
-on: [push]
-jobs:
-  analyze:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Run Analyzer
-        run: python analyzer.py
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-```
-
-### Tip 2: Batch Analysis
-Analyze multiple repos:
-```bash
-for repo in repo1 repo2 repo3; do
-  python analyzer.py --repo https://github.com/user/$repo
-done
-```
-
-### Tip 3: Export Reports
-```bash
-# Reports are saved as ANALYSIS_REPORT.md in the repo
-cp temp_repo/ANALYSIS_REPORT.md reports/$(date +%Y%m%d)_report.md
-```
-
----
-
-## 🤝 Contributing
-
-We love contributions! Here's how you can help:
-
-1. 🍴 Fork the repo
-2. 🌿 Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. 💾 Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. 📤 Push to the branch (`git push origin feature/AmazingFeature`)
-5. 🎉 Open a Pull Request
-
----
-
-## 🐛 Troubleshooting
-
-### "Could not remove temp_repo"
-**Solution:** Close any programs using the files, then manually delete the folder.
-
-### "Gemini API quota exceeded"
-**Solution:** Wait 24 hours or upgrade to Gemini Pro. The free tier has daily limits.
-
-### "Docker daemon not running"
-**Solution:** Start Docker Desktop before running the analyzer.
-
-### "GitHub token invalid"
-**Solution:** Create a new token with `repo` scope at https://github.com/settings/tokens
-
----
-
-## 📊 Stats & Performance
-
-- ⚡ Analyzes 50+ files in under 2 minutes
-- 🧠 Powered by Gemini 2.0 Flash (fastest model)
-- 🎯 95%+ accuracy in detecting common issues
-- 💾 Uses ChromaDB for intelligent document search
-- 🔄 RAG-based context understanding
-
----
-
-## 🌟 What's Next?
-
-### Coming Soon
-- [ ] Support for Terraform files
-- [ ] GitHub Actions integration
-- [ ] Slack/Discord notifications
-- [ ] Multi-repo analysis
-- [ ] Cost optimization recommendations
-- [ ] Security vulnerability database integration
-- [ ] Auto-fix for more file types
-- [ ] Web dashboard UI
-
----
-
-## 📄 License
-
-MIT License - feel free to use this in your projects!
-
----
-
-## Collaborator and Special Thanks 
-- Tejasvi Sinha
-- Shreya Kumari
-
-
-## 🙏 Credits
-
-Built with ❤️ using:
-- [Gemini AI](https://ai.google.dev) - For intelligent analysis
-- [LangChain](https://langchain.com) - For RAG implementation
-- [ChromaDB](https://www.trychroma.com) - For vector storage
-- [GitPython](https://gitpython.readthedocs.io) - For Git operations
-- [Docker SDK](https://docker-py.readthedocs.io) - For container management
-
----
-
-## 💬 Contact & Support
-
-- 📧 Email: chimanesda@gmail.com
----
-
-<div align="center">
-
----
-
-## 🚨 Troubleshooting
-
-### Issue: "Ollama not available"
-
-**Solution:**
-```bash
-# Check if Ollama is running
-curl http://localhost:11434/api/tags
-
-# If not, start it (it auto-starts on most systems)
-ollama serve
-
-# Pull required models
-ollama pull llama3
-ollama pull codellama
-```
-
-### Issue: "Analysis failed" or JSON errors
-
-**Solution:**
-- The tool has built-in fallback mechanisms
-- Will use static analysis if AI fails
-- Pattern-based fixes still work independently
-- Simply re-run the script to try again
-
-### Issue: Docker container name conflict
-
-**Solution:**
-```bash
-# Remove existing container
-docker rm -f chiman-project
-
-# Or use docker compose down
-docker compose down
-```
-
-### Issue: Slow analysis
-
-**Solution:**
-- Use `mistral` model (fastest option)
-- Reduce file count/size before analysis
-- Close other programs to free RAM for the models
-- Consider using a smaller model for quick scans
-
-### Issue: Can't remove temp_repo folder (Windows)
-
-**Solution:**
-```powershell
-# Windows - force delete
-Remove-Item -Recurse -Force './temp_repo'
-
-# Or just say 'no' when asked to cleanup
-# and delete manually later after closing all programs
-```
-
----
-
-## 💎 Why Use Ollama Instead of Cloud APIs?
-
-| Feature | Ollama (This Tool) | Gemini/GPT (Cloud) |
-|---------|-------------------|-------------------|
-| **Rate Limits** | ✅ **NONE!** | ⚠️ 15-50 requests/min |
-| **Cost** | ✅ **$0 forever** | 💸 Pay per request |
-| **Privacy** | ✅ **100% local** | ❌ Data sent to cloud |
-| **Speed** | ⚡ **Very fast** | 🐌 Network dependent |
-| **Offline** | ✅ **Works offline** | ❌ Needs internet |
-| **Setup** | 🔧 One-time install | 🔑 API keys needed |
-| **Quota Errors** | ✅ **Never!** | ❌ Frequent 429 errors |
-
-**Bottom line:** Ollama gives you **unlimited, free, private AI** - no rate limits, no costs, no cloud dependencies!
-
----
-
-## 📊 Performance Stats
-
-With Ollama on a typical laptop (16GB RAM):
-- **Analysis speed:** ~10-15 files/minute
-- **Fix generation:** ~5-10 seconds per file  
-- **Memory usage:** ~4-8GB RAM (while running)
-- **Disk space:** ~5-10GB (one-time for models)
-
-**Real-world comparison:**
-- 🚀 **Ollama:** Analyze 100 files = **FREE, no limits**
-- ⚠️ **Gemini Free:** Analyze 100 files = **Rate limit hit** after ~15 files
-- 💰 **GPT-4 API:** Analyze 100 files = **$2-5 in API costs**
-
-**Your benefit:** Analyze unlimited repositories with zero cost and zero rate limits! 🎉
-
----
-
-## 🎓 How It Works
-
-1. **Clone Repository** - Securely clones your GitHub repo
-2. **Build RAG Index** - Creates searchable embeddings of your code
-3. **Static Analysis** - Quick pattern-matching for common errors
-4. **AI Analysis** - Deep analysis using local Ollama models
-5. **Auto-Fix** - Pattern fixes first, then AI-powered fixes
-6. **Report Generation** - Creates detailed markdown reports
-7. **Git Commit** - Commits fixes and pushes to new branch
-8. **PR Ready** - Generates pull request URL
-
-**All running on YOUR machine with YOUR local AI models!**
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! Here's how:
+## Contributing
 
 1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+2. Create a feature branch: `git checkout -b feature/my-feature`
+3. Commit your changes: `git commit -m "Add my feature"`
+4. Push the branch: `git push origin feature/my-feature`
+5. Open a pull request
 
 ---
 
-## 📜 License
+## License
 
-Distributed under the MIT License. See `LICENSE` for more information.
-
----
-
-## 🙏 Acknowledgments
-
-- **Ollama** - For making local LLMs accessible to everyone
-- **LangChain** - For the RAG implementation
-- **ChromaDB** - For vector storage
-- **Docker** - For containerization
-- All the amazing open-source contributors!
+MIT License — free to use in personal and commercial projects.
 
 ---
 
-<div align="center">
+## Credits
 
-### ⭐ Star this repo if it saved you hours of manual debugging! ⭐
+Built by [chiman45](https://github.com/chiman45)
 
-**Made with 🔥 by DevOps enthusiasts, for DevOps enthusiasts**
+Tools used:
+- [Typer](https://typer.tiangolo.com) — CLI framework
+- [boto3](https://boto3.amazonaws.com/v1/documentation/api/latest/index.html) — AWS SDK
+- [Rich](https://rich.readthedocs.io) — terminal output
+- [Ollama](https://ollama.ai) — local AI models
+- [LangChain](https://langchain.com) — RAG implementation
+- [ChromaDB](https://www.trychroma.com) — vector storage
 
-**No more rate limits. No more API costs. Just pure, unlimited AI power!** 🚀
+---
 
-[Report Bug](https://github.com/yourusername/repo/issues) · [Request Feature](https://github.com/yourusername/repo/issues) · [Documentation](https://github.com/yourusername/repo/wiki)
-
-</div>
+*Email: chimanesda@gmail.com*
