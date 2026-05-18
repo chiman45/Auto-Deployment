@@ -1,0 +1,23 @@
+service: my-app
+region: us-east-1
+cluster: my-cluster
+
+image:
+  repository: 213857329085.dkr.ecr.us-east-1.amazonaws.com/my-app
+  tag: latest
+  dockerfile: ./Dockerfile
+  build_context: .
+
+ecs:
+  service_name: my-app-service
+  task_family: my-app-task
+  container_name: my-app
+  container_port: 8080
+  cpu: 256
+  memory: 512
+  desired_count: 1
+
+health:
+  endpoint: /health
+  timeout: 30
+  retries: 5
