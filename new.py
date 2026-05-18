@@ -115,12 +115,31 @@ class GitHubRepoAnalyzer:
             print("❌ Repository URL is required!")
             sys.exit(1)
         
-        # Initialize Docker client
+        # Initialize Docker client with robust connection
+        print("\n🔍 Checking Docker status...")
         try:
-            self.docker_client = docker.from_env()
-            print("✅ Docker client initialized")
+            # Try different connection methods
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    # Method 1: from_env (default)
+                    self.docker_client = docker.from_env()
+                except:
+                    # Method 2: Explicit named pipe for Windows
+                    self.docker_client = docker.DockerClient(base_url='npipe:////./pipe/docker_engine')
+                
+                # Test connection
+                self.docker_client.ping()
+                print("✅ Docker client initialized and connected")
+                
+                # Show Docker info
+                info = self.docker_client.info()
+                print(f"   Docker version: {info.get('ServerVersion', 'unknown')}")
+                print(f"   Containers: {info.get('Containers', 0)} (running: {info.get('ContainersRunning', 0)})")
+                break
         except Exception as e:
             print(f"⚠️  Docker not available: {e}")
+            print("💡 Make sure Docker Desktop is running")
             self.docker_client = None
     
     def clone_repository(self):
@@ -1090,14 +1109,41 @@ CRITICAL:
                 print(f"   ⚠️  Could not check for .env files: {e}")
             
             try:
-                # Use docker-compose to build and run
-                print("\n🔨 Building services with docker-compose...")
+                # Detect docker compose command (new: 'docker compose', old: 'docker-compose')
+                compose_cmd = ['docker', 'compose']
+                try:
+                    test_result = subprocess.run(
+                        ['docker', 'compose', 'version'],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if test_result.returncode != 0:
+                        compose_cmd = ['docker-compose']
+                except:
+                    compose_cmd = ['docker-compose']
                 
-                result = subprocess.run(
-                    ['docker-compose', 'up', '-d', '--build'],
+                print(f"\n🔨 Building services with docker-compose...")
+                print(f"   Using command: {' '.join(compose_cmd)}")
+                
+                # First, stop and remove existing containers to avoid conflicts
+                print("\n🧹 Cleaning up existing containers...")
+                cleanup_result = subprocess.run(
+                    compose_cmd + ['down'],
                     cwd=self.local_repo_path,
                     capture_output=True,
                     text=True
+                )
+                if cleanup_result.returncode == 0:
+                    print("   ✅ Existing containers removed")
+                
+                # Now build and run
+                result = subprocess.run(
+                    compose_cmd + ['up', '-d', '--build'],
+                    cwd=self.local_repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=300
                 )
                 
                 if result.returncode == 0:
@@ -1106,7 +1152,7 @@ CRITICAL:
                     
                     # List running containers
                     list_result = subprocess.run(
-                        ['docker-compose', 'ps'],
+                        compose_cmd + ['ps'],
                         cwd=self.local_repo_path,
                         capture_output=True,
                         text=True
@@ -1136,29 +1182,43 @@ CRITICAL:
                         print("   Try: http://localhost:3000 or http://localhost:8080")
                     
                     print("\n✅ Docker Compose services are running!")
-                    print("💡 To stop: cd temp_repo && docker-compose down")
+                    print(f"💡 To stop: cd {self.local_repo_path} && {' '.join(compose_cmd)} down")
                     
                     # Ask if user wants to stop now
                     stop = input("\n🛑 Stop containers now? (yes/no): ").strip().lower()
                     if stop == 'yes':
-                        subprocess.run(['docker-compose', 'down'], cwd=self.local_repo_path)
+                        subprocess.run(compose_cmd + ['down'], cwd=self.local_repo_path)
                         print("✅ Containers stopped")
                 else:
                     print(f"❌ Docker Compose failed:")
                     print(result.stderr)
                     print(result.stdout)
-                    print("\n💡 Common fixes:")
-                    print("   1. Create missing .env files")
-                    print("   2. Check docker-compose.yml syntax")
-                    print("   3. Check Dockerfile syntax (look for split FROM statements)")
-                    print("   4. Ensure all required environment variables are set")
+                    
+                    # Check if it's a volume mount error
+                    if "mount" in result.stderr.lower() or "mounting" in result.stderr.lower():
+                        print("\n⚠️  Volume mount error detected!")
+                        print("💡 Trying alternative: Build Dockerfile directly without compose...")
+                        # Don't return, fall through to individual Dockerfile build
+                    else:
+                        print("\n💡 Common fixes:")
+                        print("   1. Create missing .env files")
+                        print("   2. Check docker-compose.yml syntax")
+                        print("   3. Check Dockerfile syntax (look for split FROM statements)")
+                        print("   4. Ensure all required environment variables are set")
+                        return
                     
             except FileNotFoundError:
                 print("❌ docker-compose command not found. Please install Docker Compose.")
+            except subprocess.TimeoutExpired:
+                print("❌ Docker Compose build timed out (5 minutes). The build might still be running.")
             except Exception as e:
                 print(f"❌ Docker Compose failed: {e}")
+                import traceback
+                traceback.print_exc()
             
-            return
+            # If docker-compose failed with mount error, continue to try building Dockerfile directly
+            if "mount" not in result.stderr.lower() and "mounting" not in result.stderr.lower():
+                return
         
         # Fallback: Search for individual Dockerfiles
         print("\n🔍 No docker-compose.yml found, searching for Dockerfiles...")
@@ -1178,7 +1238,7 @@ CRITICAL:
                 if file.lower() == 'dockerfile' or file.endswith('.dockerfile'):
                     dockerfile_location = os.path.join(root, file)
                     relative_path = os.path.relpath(dockerfile_location, self.local_repo_path)
-                    dockerfiles.append((root, relative_path))
+                    dockerfiles.append((root, file, relative_path))
                     print(f"   ✅ Found: {relative_path}")
         
         if not dockerfiles:
@@ -1186,11 +1246,12 @@ CRITICAL:
             print(f"\n💡 Debug info:")
             print(f"   Searched in: {self.local_repo_path}")
             print(f"   Directory exists: {os.path.exists(self.local_repo_path)}")
-            print(f"   Contents: {os.listdir(self.local_repo_path)[:10]}")
+            if os.path.exists(self.local_repo_path):
+                print(f"   Contents: {os.listdir(self.local_repo_path)[:10]}")
             return
         
         print(f"\n🐳 Found {len(dockerfiles)} Dockerfile(s):")
-        for i, (path, rel_path) in enumerate(dockerfiles, 1):
+        for i, (path, filename, rel_path) in enumerate(dockerfiles, 1):
             print(f"   {i}. {rel_path}")
         
         # If multiple Dockerfiles, ask which one to build
@@ -1203,22 +1264,34 @@ CRITICAL:
             
             try:
                 idx = int(choice) - 1
-                dockerfile_path, dockerfile_rel = dockerfiles[idx]
+                if idx < 0 or idx >= len(dockerfiles):
+                    print("❌ Invalid choice")
+                    return
+                dockerfile_dir, dockerfile_filename, dockerfile_rel = dockerfiles[idx]
             except:
                 print("❌ Invalid choice")
                 return
         else:
-            dockerfile_path, dockerfile_rel = dockerfiles[0]
+            dockerfile_dir, dockerfile_filename, dockerfile_rel = dockerfiles[0]
         
         print(f"\n🐳 Building: {dockerfile_rel}")
         
-        # Build image
-        image_tag = f"repo-analyzer-{os.path.basename(dockerfile_path)}:latest".lower()
+        # Build image with proper context
+        build_context = dockerfile_dir
+        dockerfile_name = dockerfile_filename
+        
+        # Create image tag
+        image_tag = f"repo-analyzer-{os.path.basename(self.local_repo_path)}-{dockerfile_name}:latest".lower().replace(' ', '-')
         print(f"🔨 Building Docker image: {image_tag}")
+        print(f"   Build context: {build_context}")
+        print(f"   Dockerfile: {dockerfile_name}")
         
         try:
+            # Build with proper context
+            print("\n   Building...")
             image, build_logs = self.docker_client.images.build(
-                path=dockerfile_path,
+                path=build_context,
+                dockerfile=dockerfile_name,
                 tag=image_tag,
                 rm=True
             )
@@ -1226,43 +1299,84 @@ CRITICAL:
             # Print build logs
             for log in build_logs:
                 if 'stream' in log:
-                    print(f"   {log['stream'].strip()}")
+                    msg = log['stream'].strip()
+                    if msg:
+                        print(f"   {msg}")
             
-            print("✅ Docker image built successfully!")
+            print("\n✅ Docker image built successfully!")
             
             # Run container
-            print("🚀 Running Docker container...")
+            print("\n🚀 Running Docker container...")
             
+            # Use publish_all_ports to avoid port conflicts
             container = self.docker_client.containers.run(
                 image_tag,
                 detach=True,
-                ports={'80/tcp': 8080, '8080/tcp': 8080, '3000/tcp': 8080, '5000/tcp': 8080},
-                remove=True
+                publish_all_ports=True,
+                remove=True,
+                name="repo-analyzer-container"
             )
             
             print(f"✅ Container running with ID: {container.short_id}")
-            print(f"🌐 Attempting to open website at http://localhost:8080")
+            
+            # Get actual port mappings
+            container.reload()
+            port_mappings = container.ports
+            print(f"\n📡 Port mappings:")
+            
+            target_port = None
+            for container_port, host_bindings in port_mappings.items():
+                if host_bindings:
+                    host_port = host_bindings[0]['HostPort']
+                    print(f"   {container_port} -> localhost:{host_port}")
+                    # Save first HTTP port for browser
+                    if not target_port and container_port in ['80/tcp', '8080/tcp', '3000/tcp', '5000/tcp', '4200/tcp']:
+                        target_port = host_port
             
             # Wait a bit for the service to start
-            time.sleep(3)
+            if target_port or port_mappings:
+                time.sleep(3)
             
             # Try to open in browser
-            webbrowser.open('http://localhost:8080')
+            if target_port:
+                print(f"\n🌐 Opening http://localhost:{target_port} in browser...")
+                webbrowser.open(f'http://localhost:{target_port}')
+            elif port_mappings:
+                # Try first available port
+                first_port = list(port_mappings.values())[0]
+                if first_port:
+                    port = first_port[0]['HostPort']
+                    print(f"\n🌐 Opening http://localhost:{port} in browser...")
+                    webbrowser.open(f'http://localhost:{port}')
+            else:
+                print("\n⚠️  No port mappings detected. Container may not expose any ports.")
             
-            print("\n✅ Website should now be open in your browser!")
+            print("\n✅ Container is running!")
             print("   Press Ctrl+C to stop the container when done testing...")
             
             # Keep running
             try:
-                container.wait()
-            except KeyboardInterrupt:
+                input("\n⏸️  Press Enter to stop the container...")
                 print("\n🛑 Stopping container...")
                 container.stop()
-                print("✅ Container stopped")
+                print("✅ Container stopped and removed")
+            except KeyboardInterrupt:
+                print("\n\n🛑 Stopping container...")
+                try:
+                    container.stop()
+                    print("✅ Container stopped and removed")
+                except:
+                    pass
         
         except Exception as e:
             print(f"❌ Docker build/run failed: {e}")
-            print(f"\n💡 Check if Dockerfile is valid or if Docker daemon is running")
+            import traceback
+            traceback.print_exc()
+            print(f"\n💡 Troubleshooting:")
+            print(f"   1. Check if Dockerfile is valid")
+            print(f"   2. Ensure Docker daemon is running")
+            print(f"   3. Check if build context has all required files")
+            print(f"   4. Try building manually: cd {build_context} && docker build -t test -f {dockerfile_name} .")
     
     def commit_and_push(self, analysis_results, files_found, fixed_files):
         """Commit changes and push to new branch"""
