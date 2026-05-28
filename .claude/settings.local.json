@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(ollama pull *)"
     ]
+  },
+  "mcpServers": {
+    "deployagent-validator": {
+      "command": "python",
+      "args": ["d:\\Programing\\Projects\\Custom-CICD\\deployagent-mcp\\server.py"],
+      "env": {}
+    }
   }
 }

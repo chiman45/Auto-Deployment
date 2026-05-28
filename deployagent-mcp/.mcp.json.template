@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "deployagent-validator": {
+      "command": "python",
+      "args": ["d:\\Programing\\Projects\\Custom-CICD\\deployagent-mcp\\server.py"]
+    }
+  }
+}

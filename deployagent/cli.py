@@ -54,8 +54,9 @@ def plan(
 def apply(
     config: Path = typer.Argument(..., help="Path to deploy.yaml"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    skip_validate: bool = typer.Option(False, "--skip-validate", help="Skip Dockerfile/K8s validation"),
 ) -> None:
-    """Execute the deployment plan against AWS."""
+    """Validate Dockerfile/K8s files with Gemini, then deploy to AWS."""
     _require_file(config)
 
     with console.status("[dim]Building plan…[/]"):
@@ -78,7 +79,7 @@ def apply(
             raise typer.Exit(0)
 
     try:
-        deploy(deploy_plan.config, deploy_plan.config_hash)
+        deploy(deploy_plan.config, deploy_plan.config_hash, skip_validate=skip_validate)
     except HealthCheckFailed as exc:
         console.print(f"[bold red]Health check failed post-deploy:[/] {exc}")
         raise typer.Exit(1)

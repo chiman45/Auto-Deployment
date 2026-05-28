@@ -49,6 +49,32 @@ class ECSClient:
         return resp["taskDefinition"]["taskDefinitionArn"]
 
     @aws_retry
+    def create_service(
+        self,
+        cluster: str,
+        service_name: str,
+        task_def_arn: str,
+        desired_count: int,
+    ) -> dict:
+        return self._client.create_service(
+            cluster=cluster,
+            serviceName=service_name,
+            taskDefinition=task_def_arn,
+            desiredCount=desired_count,
+            launchType="FARGATE",
+            networkConfiguration={
+                "awsvpcConfiguration": {
+                    "assignPublicIp": "ENABLED",
+                    "subnets": [
+                            "subnet-08cf6725be89eb536",
+                            "subnet-0c1c42c0f03a1e851",
+                        ],
+                    "securityGroups": ["sg-085d20aa23c9ff9a9"],
+                }
+            },
+        )
+
+    @aws_retry
     def update_service(
         self,
         cluster: str,

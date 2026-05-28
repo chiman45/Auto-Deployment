@@ -12,12 +12,19 @@ from ..aws.ecs import ECSClient
 from ..errors.classifier import ErrorAction, classify, handle
 from ..parser.yaml_loader import DeployConfig
 from ..state.store import save_snapshot, update_status
+from ..validator import pipeline as validator
 
 console = Console()
 
 
-def deploy(config: DeployConfig, config_hash: str) -> None:
+def deploy(config: DeployConfig, config_hash: str, skip_validate: bool = False) -> None:
     """Execute a full deployment. Raises DeployError on unrecoverable failure."""
+
+    if not skip_validate:
+        dockerfile = Path(config.image.dockerfile)
+        build_context = Path(config.image.build_context)
+        validator.run(dockerfile, build_context)
+
     region = config.region
     ecs = ECSClient(region)
     ecr = ECRClient(region)
@@ -74,15 +81,26 @@ def deploy(config: DeployConfig, config_hash: str) -> None:
                 status="pending",
             )
 
-            # 4. Update ECS service
-            t = progress.add_task("Updating ECS service…", total=None)
-            ecs.update_service(
-                config.cluster,
-                config.ecs.service_name,
-                td_arn,
-                config.ecs.desired_count,
-            )
-            progress.update(t, description="[green]ECS service updated[/]")
+            # 4. Create or update ECS service
+            existing_svc = ecs.describe_service(config.cluster, config.ecs.service_name)
+            if existing_svc is None:
+                t = progress.add_task("Creating ECS service…", total=None)
+                ecs.create_service(
+                    config.cluster,
+                    config.ecs.service_name,
+                    td_arn,
+                    config.ecs.desired_count,
+                )
+                progress.update(t, description="[green]ECS service created[/]")
+            else:
+                t = progress.add_task("Updating ECS service…", total=None)
+                ecs.update_service(
+                    config.cluster,
+                    config.ecs.service_name,
+                    td_arn,
+                    config.ecs.desired_count,
+                )
+                progress.update(t, description="[green]ECS service updated[/]")
 
             # 5. CloudFormation change set + execute
             if config.cloudformation and cfn:
