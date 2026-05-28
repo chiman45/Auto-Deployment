@@ -1,0 +1,22 @@
+# Core dependencies
+gitpython==3.1.40
+PyYAML==6.0.1
+google-generativeai==0.3.2
+python-dotenv==1.0.0
+
+# LangChain and RAG
+langchain==0.1.0
+langchain-community==0.0.13
+chromadb==0.4.22
+sentence-transformers==2.2.2
+
+# Docker
+docker==7.0.0
+
+# HTTP requests
+requests==2.31.0
+
+# Additional dependencies
+numpy>=1.24.0
+huggingface-hub>=0.19.0
+pydantic>=2.0.0
