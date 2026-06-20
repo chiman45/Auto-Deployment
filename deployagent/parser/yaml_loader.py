@@ -28,6 +28,17 @@ class ECSConfig(BaseModel):
     cpu: int = 256
     memory: int = 512
     execution_role_arn: Optional[str] = None
+    environment: dict[str, str] = {}   # injected as ECS container env vars
+
+
+class ALBConfig(BaseModel):
+    name: str
+    target_group_name: str
+    vpc_id: str
+    subnets: list[str]
+    security_groups: list[str]
+    listener_port: int = 80
+    internal: bool = False
 
 
 class CloudFormationConfig(BaseModel):
@@ -48,6 +59,7 @@ class DeployConfig(BaseModel):
     cluster: str
     image: ImageConfig
     ecs: ECSConfig
+    alb: Optional[ALBConfig] = None
     cloudformation: Optional[CloudFormationConfig] = None
     health: HealthConfig = HealthConfig()
 

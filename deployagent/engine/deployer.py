@@ -6,6 +6,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
+from ..aws.alb import ensure_alb
 from ..aws.cfn import CFNClient
 from ..aws.ecr import ECRClient
 from ..aws.ecs import ECSClient
@@ -53,13 +54,31 @@ def deploy(config: DeployConfig, config_hash: str, skip_validate: bool = False) 
             )
             progress.update(t, description=f"[green]Image ready:[/] {image_uri}")
 
-            # 2. Register new task definition revision
+            # 2. ALB + target group (idempotent)
+            tg_arn: str | None = None
+            alb_dns: str | None = None
+            if config.alb:
+                t = progress.add_task("Ensuring ALB + target group…", total=None)
+                _, tg_arn, alb_dns = ensure_alb(
+                    region=region,
+                    alb_name=config.alb.name,
+                    tg_name=config.alb.target_group_name,
+                    port=config.ecs.container_port,
+                    vpc_id=config.alb.vpc_id,
+                    subnets=config.alb.subnets,
+                    security_groups=config.alb.security_groups,
+                    health_check_path=config.health.endpoint,
+                    listener_port=config.alb.listener_port,
+                )
+                progress.update(t, description=f"[green]ALB ready:[/] http://{alb_dns}")
+
+            # 3. Register new task definition revision
             t = progress.add_task("Registering ECS task definition…", total=None)
             td_payload = _build_task_definition(config, image_uri)
             td_arn = ecs.register_task_definition(td_payload)
             progress.update(t, description=f"[green]Task def:[/] {td_arn.split('/')[-1]}")
 
-            # 3. Snapshot intent to SQLite *before* any mutations
+            # 4. Snapshot intent to SQLite *before* any mutations
             deploy_id = save_snapshot(
                 service=config.service,
                 config_hash=config_hash,
@@ -81,7 +100,7 @@ def deploy(config: DeployConfig, config_hash: str, skip_validate: bool = False) 
                 status="pending",
             )
 
-            # 4. Create or update ECS service
+            # 5. Create or update ECS service
             existing_svc = ecs.describe_service(config.cluster, config.ecs.service_name)
             if existing_svc is None:
                 t = progress.add_task("Creating ECS service…", total=None)
@@ -90,6 +109,9 @@ def deploy(config: DeployConfig, config_hash: str, skip_validate: bool = False) 
                     config.ecs.service_name,
                     td_arn,
                     config.ecs.desired_count,
+                    target_group_arn=tg_arn,
+                    container_name=config.ecs.container_name,
+                    container_port=config.ecs.container_port,
                 )
                 progress.update(t, description="[green]ECS service created[/]")
             else:
@@ -102,7 +124,7 @@ def deploy(config: DeployConfig, config_hash: str, skip_validate: bool = False) 
                 )
                 progress.update(t, description="[green]ECS service updated[/]")
 
-            # 5. CloudFormation change set + execute
+            # 6. CloudFormation change set + execute
             if config.cloudformation and cfn:
                 t = progress.add_task("Applying CloudFormation changes…", total=None)
                 template_body = Path(config.cloudformation.template_file).read_text(encoding="utf-8")
@@ -119,7 +141,7 @@ def deploy(config: DeployConfig, config_hash: str, skip_validate: bool = False) 
                 else:
                     progress.update(t, description="[dim]CloudFormation — no changes[/]")
 
-            # 6. Wait for ECS stability
+            # 7. Wait for ECS stability
             t = progress.add_task("Waiting for ECS service to stabilise…", total=None)
             ecs.wait_stable(config.cluster, config.ecs.service_name)
             progress.update(t, description="[green]Service stable[/]")
@@ -127,6 +149,8 @@ def deploy(config: DeployConfig, config_hash: str, skip_validate: bool = False) 
         if deploy_id:
             update_status(deploy_id, "success")
 
+        if alb_dns:
+            console.print(f"\n[bold cyan]App URL:[/] http://{alb_dns}")
         console.print("\n[bold green]Deployment complete![/]\n")
 
     except Exception as exc:
@@ -163,6 +187,16 @@ def _build_task_definition(config: DeployConfig, image_uri: str) -> dict:
                         "awslogs-stream-prefix": "ecs",
                     },
                 },
+                **(
+                    {
+                        "environment": [
+                            {"name": k, "value": v}
+                            for k, v in config.ecs.environment.items()
+                        ]
+                    }
+                    if config.ecs.environment
+                    else {}
+                ),
             }
         ],
     }

@@ -11,6 +11,7 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
+from ..aws.alb import ALBClient
 from ..aws.cfn import CFNClient
 from ..aws.ecs import ECSClient
 from ..parser.yaml_loader import DeployConfig, load_config
@@ -49,6 +50,7 @@ def build_plan(config_path: Path) -> Plan:
     plan = Plan(config=config, config_hash=config_hash)
 
     _plan_ecs(plan, config, ecs)
+    _plan_alb(plan, config)
     _plan_cfn(plan, config)
 
     return plan
@@ -134,6 +136,52 @@ def _plan_ecs(plan: Plan, config: DeployConfig, ecs: ECSClient) -> None:
                 current=f"count={current_count}",
                 desired=f"count={config.ecs.desired_count}",
             ))
+
+
+# ── ALB diff ──────────────────────────────────────────────────────────────────
+
+def _plan_alb(plan: Plan, config) -> None:
+    if not config.alb:
+        return
+
+    client = ALBClient(config.region)
+    alb = client.find_alb(config.alb.name)
+    tg  = client.find_target_group(config.alb.target_group_name)
+
+    if alb is None:
+        plan.changes.append(Change(
+            resource=config.alb.name,
+            resource_type="ALB",
+            action="CREATE",
+            current="(none)",
+            desired=f"internet-facing, port={config.alb.listener_port}",
+        ))
+    else:
+        dns = alb.get("DNSName", "?")
+        plan.changes.append(Change(
+            resource=config.alb.name,
+            resource_type="ALB",
+            action="NO_CHANGE",
+            current=f"dns={dns}",
+            desired="(same)",
+        ))
+
+    if tg is None:
+        plan.changes.append(Change(
+            resource=config.alb.target_group_name,
+            resource_type="Target Group",
+            action="CREATE",
+            current="(none)",
+            desired=f"port={config.ecs.container_port}, type=ip",
+        ))
+    else:
+        plan.changes.append(Change(
+            resource=config.alb.target_group_name,
+            resource_type="Target Group",
+            action="NO_CHANGE",
+            current="exists",
+            desired="(same)",
+        ))
 
 
 # ── CloudFormation diff ────────────────────────────────────────────────────────

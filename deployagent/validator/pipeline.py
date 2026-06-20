@@ -1,6 +1,6 @@
 """
-Validation pipeline: static checks → pattern fix → Gemini AI fix.
-Runs before deployment to catch and repair issues automatically.
+Validation pipeline: static checks → pattern fix.
+AI analysis is handled by the MCP plugin (Claude Code) — no local LLM required.
 """
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from rich.console import Console
 
 from ..parser.k8s_manifest import ManifestIssue, validate_manifest
 from ..parser.yaml_loader import attempt_fix
-from . import gemini_fixer
 
 console = Console()
 
@@ -25,9 +24,7 @@ _EXCLUDED_NAMES = {"deploy.yaml", "deploy.yml", "deployagent.yaml", "deployagent
 class FileResult:
     path: Path
     static_issues: list[ManifestIssue] = field(default_factory=list)
-    gemini_issues: list[str] = field(default_factory=list)
     pattern_fixed: bool = False
-    gemini_fixed: bool = False
 
     @property
     def has_errors(self) -> bool:
@@ -35,7 +32,7 @@ class FileResult:
 
     @property
     def clean(self) -> bool:
-        return not self.static_issues and not self.gemini_issues
+        return not self.static_issues
 
 
 @dataclass
@@ -52,7 +49,7 @@ class ValidationReport:
 
     @property
     def fixed_count(self) -> int:
-        return sum(1 for r in self.results if r.pattern_fixed or r.gemini_fixed)
+        return sum(1 for r in self.results if r.pattern_fixed)
 
 
 def run(dockerfile: Path, build_context: Path) -> ValidationReport:
@@ -94,16 +91,6 @@ def run(dockerfile: Path, build_context: Path) -> ValidationReport:
         if result.has_errors or result.static_issues:
             result.pattern_fixed = attempt_fix(path)
 
-        # Step 3: Gemini AI fix for anything remaining
-        try:
-            gemini_issues, was_fixed = gemini_fixer.analyze_and_fix(path)
-            result.gemini_issues = gemini_issues
-            result.gemini_fixed = was_fixed
-        except RuntimeError as exc:
-            console.print(f"  [yellow]Gemini skipped:[/] {exc}")
-        except Exception as exc:
-            console.print(f"  [yellow]Gemini error on {path.name}:[/] {exc}")
-
         report.results.append(result)
         _print_file_result(result)
 
@@ -114,7 +101,7 @@ def run(dockerfile: Path, build_context: Path) -> ValidationReport:
 def _print_file_result(result: FileResult) -> None:
     name = result.path.name
 
-    if result.clean and not result.pattern_fixed and not result.gemini_fixed:
+    if result.clean and not result.pattern_fixed:
         console.print(f"  [green]✓[/] {name} — clean")
         return
 
@@ -124,13 +111,8 @@ def _print_file_result(result: FileResult) -> None:
         colour = {"error": "red", "warning": "yellow", "suggestion": "dim"}.get(issue.level, "white")
         console.print(f"    [{colour}]{issue}[/{colour}]")
 
-    for issue in result.gemini_issues:
-        console.print(f"    [yellow][GEMINI] {issue}[/]")
-
     if result.pattern_fixed:
         console.print(f"    [green]→ Auto-fixed by pattern matcher[/]")
-    if result.gemini_fixed:
-        console.print(f"    [green]→ Auto-fixed by Gemini AI[/]")
 
     console.print()
 

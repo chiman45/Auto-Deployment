@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "deployagent-validator": {
+      "command": "C:\\Users\\hp\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\mcp.exe",
+      "args": ["run", "d:\\Programing\\Projects\\Custom-CICD\\deployagent-mcp\\server.py:mcp"]
+    }
+  }
+}

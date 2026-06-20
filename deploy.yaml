@@ -16,6 +16,21 @@ ecs:
   cpu: 256
   memory: 512
   desired_count: 1
+  environment:
+    NODE_ENV: production
+    PORT: "8080"
+    # Add your app environment variables here:
+
+alb:
+  name: my-app-alb
+  target_group_name: my-app-tg
+  vpc_id: vpc-0a80aa3fc966f5d2d     # replace with your VPC ID
+  subnets:
+    - subnet-08cf6725be89eb536
+    - subnet-0c1c42c0f03a1e851
+  security_groups:
+    - sg-085d20aa23c9ff9a9
+  listener_port: 80
 
 health:
   endpoint: /health

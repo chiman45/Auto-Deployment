@@ -5,6 +5,7 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
+from ..aws.alb import ALBClient
 from ..aws.cloudwatch import CloudWatchClient
 from ..aws.ecs import ECSClient
 from ..errors.classifier import HealthCheckFailed
@@ -38,7 +39,14 @@ def check_health(config: DeployConfig) -> bool:
     log_group = f"/ecs/{config.ecs.task_family}"
     error_lines = cw.get_service_errors(log_group, minutes=5)
 
-    _print_status_table(config, running, desired, pending, rollout_state, error_lines)
+    alb_dns: str | None = None
+    if config.alb:
+        alb_client = ALBClient(config.region)
+        alb = alb_client.find_alb(config.alb.name)
+        if alb:
+            alb_dns = alb.get("DNSName")
+
+    _print_status_table(config, running, desired, pending, rollout_state, error_lines, alb_dns)
 
     if error_lines:
         console.print("\n[bold red]Recent error logs:[/]")
@@ -69,6 +77,7 @@ def _print_status_table(
     pending: int,
     rollout_state: str,
     error_lines: list[str],
+    alb_dns: str | None = None,
 ) -> None:
     table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
     table.add_column("Metric", style="dim", min_width=20)
@@ -80,6 +89,8 @@ def _print_status_table(
 
     table.add_row("Service",        config.ecs.service_name)
     table.add_row("Cluster",        config.cluster)
+    if alb_dns:
+        table.add_row("App URL", f"[cyan]http://{alb_dns}[/]")
     table.add_row("Desired tasks",  str(desired))
     table.add_row("Running tasks",  _colour(str(running), running == desired))
     table.add_row("Pending tasks",  str(pending))

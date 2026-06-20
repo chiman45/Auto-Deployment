@@ -55,8 +55,11 @@ class ECSClient:
         service_name: str,
         task_def_arn: str,
         desired_count: int,
+        target_group_arn: str | None = None,
+        container_name: str = "",
+        container_port: int = 8080,
     ) -> dict:
-        return self._client.create_service(
+        kwargs: dict = dict(
             cluster=cluster,
             serviceName=service_name,
             taskDefinition=task_def_arn,
@@ -66,13 +69,22 @@ class ECSClient:
                 "awsvpcConfiguration": {
                     "assignPublicIp": "ENABLED",
                     "subnets": [
-                            "subnet-08cf6725be89eb536",
-                            "subnet-0c1c42c0f03a1e851",
-                        ],
+                        "subnet-08cf6725be89eb536",
+                        "subnet-0c1c42c0f03a1e851",
+                    ],
                     "securityGroups": ["sg-085d20aa23c9ff9a9"],
                 }
             },
         )
+        if target_group_arn:
+            kwargs["loadBalancers"] = [
+                {
+                    "targetGroupArn": target_group_arn,
+                    "containerName": container_name,
+                    "containerPort": container_port,
+                }
+            ]
+        return self._client.create_service(**kwargs)
 
     @aws_retry
     def update_service(

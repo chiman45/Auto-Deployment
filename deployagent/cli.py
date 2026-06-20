@@ -56,7 +56,7 @@ def apply(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
     skip_validate: bool = typer.Option(False, "--skip-validate", help="Skip Dockerfile/K8s validation"),
 ) -> None:
-    """Validate Dockerfile/K8s files with Gemini, then deploy to AWS."""
+    """Validate Dockerfile/K8s files statically, then deploy to AWS."""
     _require_file(config)
 
     with console.status("[dim]Building plan…[/]"):
