@@ -1,0 +1,3 @@
+[console_scripts]
+chims-deployment-mcp = chims_deployment.server:main
+deployagent = deployagent.cli:app

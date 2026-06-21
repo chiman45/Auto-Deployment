@@ -1,7 +1,22 @@
 [project]
-name = "deployagent"
-version = "0.1.0"
+name = "chims-deployment"
+version = "1.0.0"
+description = "Claude Code MCP plugin for deploying Dockerized apps to AWS ECS — validate, deploy, diagnose via natural language"
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.11"
+authors = [{ name = "Chiman", email = "chiman24100@iiitnr.edu.in" }]
+keywords = ["aws", "ecs", "deployment", "mcp", "claude", "devops", "fargate"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Systems Administration",
+]
 dependencies = [
     "typer>=0.9",
     "boto3>=1.34",
@@ -10,10 +25,17 @@ dependencies = [
     "tenacity>=8",
     "pyyaml>=6",
     "python-dotenv>=1.0",
+    "mcp[cli]>=1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/chiman45/Custom-CICD"
+Repository = "https://github.com/chiman45/Custom-CICD"
+Issues = "https://github.com/chiman45/Custom-CICD/issues"
 
 [project.scripts]
 deployagent = "deployagent.cli:app"
+chims-deployment-mcp = "chims_deployment.server:main"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -21,4 +43,4 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["deployagent*"]
+include = ["deployagent*", "chims_deployment*"]

@@ -1,0 +1,349 @@
+Metadata-Version: 2.4
+Name: chims-deployment
+Version: 1.0.0
+Summary: Claude Code MCP plugin for deploying Dockerized apps to AWS ECS — validate, deploy, diagnose via natural language
+Author-email: Chiman <chiman24100@iiitnr.edu.in>
+License: MIT
+Project-URL: Homepage, https://github.com/chiman45/Custom-CICD
+Project-URL: Repository, https://github.com/chiman45/Custom-CICD
+Project-URL: Issues, https://github.com/chiman45/Custom-CICD/issues
+Keywords: aws,ecs,deployment,mcp,claude,devops,fargate
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Software Development :: Libraries
+Classifier: Topic :: System :: Systems Administration
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: typer>=0.9
+Requires-Dist: boto3>=1.34
+Requires-Dist: rich>=13
+Requires-Dist: pydantic>=2
+Requires-Dist: tenacity>=8
+Requires-Dist: pyyaml>=6
+Requires-Dist: python-dotenv>=1.0
+Requires-Dist: mcp[cli]>=1.0
+
+# Custom CI/CD Toolkit
+
+An AI-powered deployment toolkit for AWS ECS — deploy any Dockerized app with a single command, with Claude Code as your built-in DevOps assistant.
+
+---
+
+## What's Inside
+
+| Component | Purpose |
+|---|---|
+| `deployagent` | CLI tool to deploy Dockerized apps to AWS ECS Fargate |
+| `deployagent-mcp` | Claude Code MCP plugin — AI validates, diagnoses, and deploys via natural language |
+
+---
+
+## Table of Contents
+
+- [How It Works](#how-it-works)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Claude Code MCP Plugin](#claude-code-mcp-plugin)
+- [Configuration — deploy.yaml](#configuration--deployyaml)
+- [AWS Setup](#aws-setup)
+- [CLI Commands](#cli-commands)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## How It Works
+
+```
+Your project + deploy.yaml
+        ↓
+Say "deploy the project" to Claude Code
+        ↓
+Claude asks: container name? port? tag? replicas? env vars?
+        ↓
+1. Validates Dockerfile + K8s manifests (static analysis)
+2. Builds Docker image + pushes to ECR
+3. Creates / updates ALB + target group (fixed public DNS)
+4. Registers new ECS task definition (with env vars injected)
+5. Creates or rolling-updates ECS service
+6. Waits for service stability
+7. Runs health check
+8. Saves deploy snapshot to SQLite (for rollback)
+        ↓
+App URL: http://<alb-dns-name>
+```
+
+If the health check fails, it automatically rolls back to the last known-good state.
+
+---
+
+## Prerequisites
+
+- Python 3.11+
+- Docker Desktop (must be running during deploy)
+- AWS account with IAM credentials
+- [Claude Code](https://claude.ai/code) VSCode extension (for MCP plugin)
+
+---
+
+## Installation
+
+```bash
+git clone https://github.com/chiman45/Custom-CICD.git
+cd Custom-CICD
+
+pip install -e .
+
+# Verify
+deployagent --help
+```
+
+### AWS credentials
+
+Create a `.env` file in the project root (gitignored):
+
+```env
+AWS_ACCESS_KEY_ID=your_access_key
+AWS_SECRET_ACCESS_KEY=your_secret_key
+AWS_DEFAULT_REGION=us-east-1
+```
+
+---
+
+## Claude Code MCP Plugin
+
+The MCP plugin lets Claude Code deploy, validate, and diagnose your app using natural language — no Bash scripts needed.
+
+### Setup
+
+The plugin is pre-configured in [.mcp.json](.mcp.json). Just open the project in VSCode with the Claude Code extension installed and reload the window (`Ctrl+Shift+P` → `Developer: Reload Window`). You should see `deployagent-validator` listed under `/mcp`.
+
+### Available tools
+
+| What you say | Tool Claude uses |
+|---|---|
+| "deploy the project" | `prepare_deploy` → ask questions → `update_deploy_config` → `deploy` |
+| "what's the status?" | `get_deploy_logs` |
+| "show me the logs" | `get_service_logs` |
+| "deployment failed / health check failing" | `get_ecs_diagnostics` |
+| "check my Dockerfile" | `validate_dockerfile` |
+| "check all files before deploy" | `pre_deploy_check` |
+| "fix this file" (after user approves) | `apply_fix` |
+
+### Deploy flow
+
+When you say **"deploy the project"**, Claude will:
+
+1. Call `prepare_deploy` — reads `deploy.yaml` and checks AWS for existing resources
+2. Ask you to confirm or change:
+   - Container name and port
+   - Docker image tag
+   - Number of replicas
+   - Environment variables
+3. Warn you if the ECS service already exists (rolling update) or if the ALB is missing (needs service recreation)
+4. Call `deploy` and stream live logs every 10–15 seconds until done
+5. Print the public App URL at the end
+
+### Auto-diagnosis
+
+If a deployment fails, say **"fix the deployment error"** and Claude will call `get_ecs_diagnostics` to pull:
+- ECS service events and rollout state
+- Stopped task exit codes and crash reasons
+- Last 60 lines from CloudWatch Logs
+- ECR image existence check
+
+Claude reads all of it and diagnoses the root cause automatically.
+
+---
+
+## Configuration — deploy.yaml
+
+```yaml
+service: my-app                   # label used for deploy history
+region: us-east-1
+cluster: my-cluster
+
+image:
+  repository: 123456789.dkr.ecr.us-east-1.amazonaws.com/my-app
+  tag: latest                     # use git SHA for unique deploys
+  dockerfile: ./Dockerfile
+  build_context: .
+
+ecs:
+  service_name: my-app-service
+  task_family: my-app-task
+  container_name: my-app
+  container_port: 8080            # port your app listens on inside the container
+  cpu: 256                        # 256 = 0.25 vCPU
+  memory: 512                     # MB
+  desired_count: 1
+  environment:                    # injected as ECS container env vars
+    NODE_ENV: production
+    PORT: "8080"
+    # DATABASE_URL: postgres://...
+    # Add your app's env vars here
+
+alb:
+  name: my-app-alb                # ALB name (created automatically if it doesn't exist)
+  target_group_name: my-app-tg
+  vpc_id: vpc-xxxxxxxxxxxxxxxxx   # your VPC ID
+  subnets:
+    - subnet-xxxxxxxxxxxxxxxxx
+    - subnet-xxxxxxxxxxxxxxxxx
+  security_groups:
+    - sg-xxxxxxxxxxxxxxxxx
+  listener_port: 80
+
+health:
+  endpoint: /health
+  timeout: 30
+  retries: 5
+
+# Optional — remove if not using CloudFormation
+# cloudformation:
+#   stack_name: my-app-infra
+#   template_file: ./infra/template.yaml
+#   parameters:
+#     Environment: production
+```
+
+**Tip:** Use git commit SHA as the tag so every deploy is unique:
+
+```bash
+# Linux/macOS
+sed -i "s/tag: .*/tag: $(git rev-parse --short HEAD)/" deploy.yaml
+
+# Windows PowerShell
+(Get-Content deploy.yaml) -replace 'tag: .*', "tag: $(git rev-parse --short HEAD)" | Set-Content deploy.yaml
+```
+
+---
+
+## AWS Setup
+
+### Required IAM permissions
+
+Your IAM user needs these permissions (AWS Console → IAM → Users → your user → Add inline policy):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeServices", "ecs:DescribeTaskDefinition", "ecs:ListTasks",
+        "ecs:DescribeTasks", "ecs:RegisterTaskDefinition", "ecs:UpdateService",
+        "ecs:CreateService", "ecs:DeleteService",
+        "ecr:GetAuthorizationToken", "ecr:BatchCheckLayerAvailability",
+        "ecr:PutImage", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload", "ecr:DescribeImages", "ecr:DescribeRepositories",
+        "elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:CreateLoadBalancer",
+        "elasticloadbalancing:DescribeTargetGroups", "elasticloadbalancing:CreateTargetGroup",
+        "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:CreateListener",
+        "elasticloadbalancing:ModifyListener",
+        "logs:DescribeLogStreams", "logs:GetLogEvents", "logs:FilterLogEvents",
+        "cloudformation:DescribeStacks", "cloudformation:CreateChangeSet",
+        "cloudformation:DescribeChangeSet", "cloudformation:ExecuteChangeSet",
+        "iam:PassRole"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+### One-time AWS resource creation
+
+```bash
+# Get your account ID
+aws sts get-caller-identity --query Account --output text
+
+# Create ECR repository
+aws ecr create-repository --repository-name my-app --region us-east-1
+
+# Create ECS cluster
+aws ecs create-cluster --cluster-name my-cluster --region us-east-1
+
+# Create ECS task execution role
+aws iam create-role \
+  --role-name ecsTaskExecutionRole \
+  --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+
+aws iam attach-role-policy \
+  --role-name ecsTaskExecutionRole \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+# Create CloudWatch log group
+aws logs create-log-group --log-group-name /ecs/my-app-task --region us-east-1
+
+# Look up your VPC, subnet, and security group
+aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query "Vpcs[0].VpcId" --output text
+aws ec2 describe-subnets --filters Name=vpc-id,Values=<VPC_ID> --query "Subnets[*].SubnetId" --output text
+aws ec2 describe-security-groups --filters Name=vpc-id,Values=<VPC_ID> Name=group-name,Values=default --query "SecurityGroups[0].GroupId" --output text
+```
+
+Paste those values into `deploy.yaml` under `alb.vpc_id`, `alb.subnets`, and `alb.security_groups`.
+
+---
+
+## CLI Commands
+
+You can also use the CLI directly (without Claude Code):
+
+```bash
+# Dry run — shows what will change, no AWS mutations
+deployagent plan deploy.yaml
+
+# Deploy (asks for confirmation)
+deployagent apply deploy.yaml
+
+# Deploy without prompt (CI/CD pipelines)
+deployagent apply deploy.yaml --yes
+
+# Live health check
+deployagent status deploy.yaml
+
+# View full deploy history
+deployagent status deploy.yaml --history
+
+# Roll back one deploy
+deployagent rollback deploy.yaml
+
+# Roll back two deploys
+deployagent rollback deploy.yaml --steps 2
+```
+
+---
+
+## Troubleshooting
+
+| Error | Fix |
+|---|---|
+| `docker: error during connect` | Start Docker Desktop |
+| `LoadBalancerNotFound` during plan | ALB doesn't exist yet — it will be created on first deploy |
+| `AccessDeniedException` on CloudWatch | Add `logs:DescribeLogStreams` and `logs:GetLogEvents` to your IAM policy |
+| `Nothing to deploy` | Change the image tag — same tag = no change detected |
+| MCP server not showing in `/mcp` | `Ctrl+Shift+P` → `Developer: Reload Window` |
+| Health check failing after deploy | Say "fix the deployment error" — Claude will run diagnostics automatically |
+| Task keeps crashing (exit=1) | Check CloudWatch logs — say "show me the logs" |
+| Service has no public URL | ALB was not attached — delete the ECS service and redeploy |
+
+---
+
+## Credits
+
+Built by [chiman45](https://github.com/chiman45)
+
+- [Typer](https://typer.tiangolo.com) — CLI framework
+- [boto3](https://boto3.amazonaws.com/v1/documentation/api/latest/index.html) — AWS SDK
+- [Rich](https://rich.readthedocs.io) — terminal output
+- [FastMCP](https://github.com/jlowin/fastmcp) — MCP server framework
+- [Claude Code](https://claude.ai/code) — AI deployment assistant
+
+---
+
+*MIT License — chiman24100@iiitnr.edu.in*
